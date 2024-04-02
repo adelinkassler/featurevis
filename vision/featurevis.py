@@ -12,8 +12,10 @@ import pdb
 import json
 from PIL import Image
 
-def load_resnet18(weights=models.ResNet18_Weights.DEFAULT):
-    model = models.resnet18(weights=weights)
+def load_resnet18(weights=None):
+    # weights = models.ResNet18_Weights.DEFAULT if weights is None else weights
+    # model = models.resnet18(weights=weights)
+    model = models.resnet18(pretrained=True)
     return model
 
 def preprocess_image(image):
@@ -40,8 +42,8 @@ def activation_maximization(
     aggregation='average',
     # Optimizer and convergence parameters
     max_iterations=1000,
-    min_iterations=0,
-    convergence_threshold=1e-3,
+    min_iterations=2,
+    convergence_threshold=1e-4,
     convergence_window=1,
     lr_schedule=None,
     learning_rate=0.1,
@@ -68,9 +70,9 @@ def activation_maximization(
     use_gpu=None, # Set automatically by visualize_features
     **kwargs # Absorbs unnecessary **kwargs passed from visualize_features
 ):
-    if kwargs:
-        print("activation_maximization() received unnecessary arguments:", kwargs)
-    assert min_iterations >= 2, "min_iterations must be at least 2"
+    # if kwargs:
+    #     print("activation_maximization() received unnecessary arguments:", kwargs)
+    assert min_iterations >= convergence_window, "min_iterations must be at least 2"
 
     model.eval()
     target_layer = model
@@ -211,7 +213,7 @@ def activation_maximization(
         # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
         # if i >= (min_iterations-1) and max(loss_values[-convergence_window:]) - min(loss_values[convergence_window:]) < convergence_threshold:
         # Converges if the change in loss is less than convergence_threshold for the last convergence_window steps
-        if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window)])< convergence_threshold:
+        if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
             convergence_iteration = i + 1
             break
 
@@ -235,13 +237,48 @@ def activation_maximization(
 
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
-def visualize_features(model, layer_names, channels=None, neurons=None, aggregation='average',
-                       crop_factor=2, checkpoint_path=None, output_path=None, batch_size=10, **kwargs):
-    use_gpu = torch.cuda.is_available()
+def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
+                       crop_factor=2, checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None, **kwargs):
+    if use_gpu is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
+    else:
+        use_gpu = torch.cuda.is_available()
     use_all_channels = True if not channels else False
 
+    if layer_names is None:
+        layer_names = [name for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)]
+
     if use_all_channels:
-        channels_per_layer = [model.get_layer_output_size(layer_name) for layer_name in layer_names]
+        channels_per_layer = []
+        for layer_name in layer_names:
+            target_layer = model
+            for submodule in layer_name.split('.'):
+                target_layer = target_layer._modules.get(submodule)
+            
+            # Get the number of output channels for the target layer
+            if isinstance(target_layer, nn.Conv2d):
+                num_channels = target_layer.out_channels
+            elif isinstance(target_layer, nn.BatchNorm2d):
+                num_channels = target_layer.num_features
+            elif isinstance(target_layer, nn.Linear):
+                num_channels = target_layer.out_features
+            elif isinstance(target_layer, nn.Sequential):
+                # If the target layer is a sequential block (e.g., 'layer2'),
+                # we assume it contains convolutional layers and get the number of output channels
+                # from the last convolutional layer in the block
+                conv_layers = [layer for layer in target_layer if isinstance(layer, nn.Conv2d)]
+                if conv_layers:
+                    num_channels = conv_layers[-1].out_channels
+                else:
+                    # next
+                    raise ValueError(f"No convolutional layers found in the sequential block: {layer_name}")
+            else:
+                # next
+                raise ValueError(f"Unsupported layer type: {type(target_layer)}")
+            
+            channels_per_layer.append(num_channels)
+        
         total_batches = sum(len(range(0, channels, batch_size)) for channels in channels_per_layer)
     elif channels is None:
         raise ValueError("Please provide either the 'channels' argument or set 'use_all_channels' to True.")
@@ -267,7 +304,7 @@ def visualize_features(model, layer_names, channels=None, neurons=None, aggregat
                 for neuron in neurons:
                     input_image = None
                     if checkpoint_path is not None:
-                        input_image = load_feature_image(layer_name, channel, neuron, aggregation, checkpoint_path)
+                        input_image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
                         input_image = torch.from_numpy(input_image).float()
                         input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
                         input_image = input_image.unsqueeze(0) # Add batch dimension
@@ -292,14 +329,14 @@ def visualize_features(model, layer_names, channels=None, neurons=None, aggregat
 
     return feature_images
 
-def plot_feature_images(feature_images, num_columns=5):
+def plot_feature_images(feature_images, num_columns=5, output_path=None):
     num_images = len(feature_images)
     num_rows = (num_images + num_columns - 1) // num_columns
 
     fig, axes = plt.subplots(num_rows, num_columns, figsize=(num_columns*3, num_rows*3))
     axes = axes.flatten()
 
-    for i, (image, activation, _, _, layer_name, channel, neuron, aggregation) in enumerate(feature_images):
+    for i, (image, activation, _, _, layer_name, channel, neuron, aggregation) in enumerate(feature_images): # add aggregation back
         axes[i].imshow(image)
         axes[i].axis('off')
         if aggregation == 'single':
@@ -311,7 +348,10 @@ def plot_feature_images(feature_images, num_columns=5):
         axes[i].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    if output_path is not None:
+        plt.savefig(output_path)
+    else:
+        plt.show()
 
 def feature_image_paths(directory, layer_name, channel, neuron, aggregation):
     if neuron is not None:
@@ -337,6 +377,7 @@ def save_feature_images(feature_images, checkpoint_path, **kwargs):
             "Layer": layer_name,
             "Channel": channel,
             "Neuron": neuron,
+            "Aggregation": aggregation,
             "Activation": activation,
             "Convergence Iteration": convergence_iteration,
             "Loss Values": loss_values,
@@ -345,12 +386,12 @@ def save_feature_images(feature_images, checkpoint_path, **kwargs):
         with open(info_filename, 'w') as file:
             json.dump(info_data, file)
 
-def load_feature_image(layer_name, channel, neuron, aggregation, checkpoint_path):
+def load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation):
     filename, _ = feature_image_paths(checkpoint_path, layer_name, channel, neuron, aggregation)
     image = plt.imread(filename)
     return image
 
-def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10):
+def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10, output_path=None):
     feature_images = []
 
     for layer_name in layer_names:
@@ -360,7 +401,7 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
 
             for channel in batch_channels:
                 for neuron in neurons:
-                    image = load_feature_image(layer_name, channel, neuron, aggregation, checkpoint_path)
+                    image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
                     _, info_filename = feature_image_paths(checkpoint_path, layer_name, channel, neuron, aggregation)
                     with open(info_filename, 'r') as file:
                         info_data = json.load(file)
@@ -371,6 +412,6 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
                     batch_feature_images.append((image, activation, loss_values, convergence_iteration, layer_name, channel, neuron))
 
             feature_images.extend(batch_feature_images)
-            plot_feature_images(batch_feature_images, num_columns)
+            plot_feature_images(batch_feature_images, num_columns, output_path)
 
     return feature_images
