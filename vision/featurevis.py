@@ -211,9 +211,9 @@ def activation_maximization(
         print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="")
 
         # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
-        # if i >= (min_iterations-1) and max(loss_values[-convergence_window:]) - min(loss_values[convergence_window:]) < convergence_threshold:
+        # if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
         # Converges if the change in loss is less than convergence_threshold for the last convergence_window steps
-        if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
+        if i >= (min_iterations-1) and max(loss_values[-convergence_window:]) - min(loss_values[-convergence_window:]) < convergence_threshold:
             convergence_iteration = i + 1
             break
 
@@ -317,7 +317,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
             feature_images.extend(batch_feature_images)
 
             if output_path is not None:
-                save_feature_images(batch_feature_images, output_path)
+                save_feature_images(batch_feature_images, output_path, kwargs)
 
             processed_batches += 1
             elapsed_time = time.time() - start_time
@@ -365,7 +365,7 @@ def feature_image_paths(directory, layer_name, channel, neuron, aggregation):
 
     return filename, info_filename
 
-def save_feature_images(feature_images, checkpoint_path, **kwargs):
+def save_feature_images(feature_images, checkpoint_path, params):
     directory = f"{checkpoint_path}"
     os.makedirs(directory, exist_ok=True)
     print(f"save_feature_images called with checkpoint_path={checkpoint_path}")
@@ -380,8 +380,8 @@ def save_feature_images(feature_images, checkpoint_path, **kwargs):
             "Aggregation": aggregation,
             "Activation": activation,
             "Convergence Iteration": convergence_iteration,
-            "Loss Values": loss_values,
-            "Parameters": kwargs
+            "Parameters": params,
+            "Loss Values": loss_values
         }
         with open(info_filename, 'w') as file:
             json.dump(info_data, file)
