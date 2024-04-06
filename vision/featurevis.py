@@ -11,6 +11,9 @@ from typing import List, Tuple
 import pdb
 import json
 from PIL import Image
+import subprocess
+import random
+import string
 
 def load_resnet18(weights=None):
     # weights = models.ResNet18_Weights.DEFAULT if weights is None else weights
@@ -238,13 +241,17 @@ def activation_maximization(
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
-                       crop_factor=2, checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None, **kwargs):
+                       checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None,
+                       parallel=False, return_output=True, **kwargs):
     if use_gpu is not None:
         if not torch.cuda.is_available():
             raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
     else:
         use_gpu = torch.cuda.is_available()
     use_all_channels = True if not channels else False
+
+    if parallel:
+        unique_id = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
 
     if layer_names is None:
         layer_names = [name for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)]
@@ -267,7 +274,8 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 # If the target layer is a sequential block (e.g., 'layer2'),
                 # we assume it contains convolutional layers and get the number of output channels
                 # from the last convolutional layer in the block
-                conv_layers = [layer for layer in target_layer if isinstance(layer, nn.Conv2d)]
+                conv_layers = [layer for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)\
+                               and name[:len(layer_name)] == layer_name]
                 if conv_layers:
                     num_channels = conv_layers[-1].out_channels
                 else:
@@ -292,42 +300,145 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
     if neurons is None:
         neurons = [None]
 
+    job_ids = []
+
     for layer_idx, layer_name in enumerate(layer_names):
         if use_all_channels:
             channels = list(range(channels_per_layer[layer_idx]))
 
         for i in range(0, len(channels), batch_size):
             batch_channels = channels[i:i+batch_size]
-            batch_feature_images = []
+            # batch_neurons = neurons[i:i+batch_size] if neurons else [None] * len(batch_channels)
+            batch_neurons = neurons
 
-            for channel in batch_channels:
-                for neuron in neurons:
-                    input_image = None
-                    if checkpoint_path is not None:
-                        input_image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
-                        input_image = torch.from_numpy(input_image).float()
-                        input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
-                        input_image = input_image.unsqueeze(0) # Add batch dimension
+            if parallel:
+                # Submit SLURM job for each batch
+                job_name = f"act_max_{unique_id}_{layer_name}_{i}"
+                job_script = f"""#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --partition=single
+#SBATCH --time=00:10:00
+#SBATCH --output=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.out
+#SBATCH --error=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.err
 
-                    feature_image, activation, loss_values, convergence_iteration, _, _, neuron, aggregation = activation_maximization(
-                        model, layer_name, channel, neuron, input_image=input_image, **kwargs
-                    )
-                    batch_feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation))
+python3 -c "
+from vision.featurevis import *
+model = load_resnet18()
+feature_images = []
+for channel, neuron in zip({batch_channels}, {batch_neurons}):
+    feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation = activation_maximization(
+        model, layer_name='{layer_name}', channel=channel, neuron=neuron,
+        aggregation='{aggregation}', 
+        checkpoint_path='{checkpoint_path}', output_path='{output_path}',
+        use_gpu={use_gpu}, **{kwargs}
+    )
+    feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron))
 
-            feature_images.extend(batch_feature_images)
+# Save feature images and info
+save_feature_images(feature_images, '{output_path}', {kwargs})
+"
+"""
 
-            if output_path is not None:
-                save_feature_images(batch_feature_images, output_path, kwargs)
+                job_path = os.path.expanduser(f"~/.tmp/job_script_{unique_id}.sh")
+                f = open(job_path, 'w')
+                f.write(job_script)
+                f.close()
+                subprocess.Popen(['sbatch', job_path], stdout=subprocess.PIPE)
+                # subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE)
+                # os.remove(job_path)
+                # job_id = subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE).communicate()[0].decode('utf-8').split()[-1]
+                # job_ids.append(job_id)
+            else:
+                batch_feature_images = []
 
-            processed_batches += 1
-            elapsed_time = time.time() - start_time
-            estimated_total_time = (elapsed_time / processed_batches) * total_batches
-            remaining_time = estimated_total_time - elapsed_time
+                for channel in batch_channels:
+                    for neuron in neurons:
+                        input_image = None
+                        if checkpoint_path is not None:
+                            input_image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
+                            input_image = torch.from_numpy(input_image).float()
+                            input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
+                            input_image = input_image.unsqueeze(0) # Add batch dimension
 
-            print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
-                  f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s")
+                        feature_image, activation, loss_values, convergence_iteration, _, _, neuron, aggregation = activation_maximization(
+                            model, layer_name, channel, neuron, input_image=input_image, **kwargs
+                        )
+                        batch_feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation))
 
-    return feature_images
+                feature_images.extend(batch_feature_images)
+
+                if output_path is not None:
+                    save_feature_images(batch_feature_images, output_path, kwargs)
+
+                processed_batches += 1
+                elapsed_time = time.time() - start_time
+                estimated_total_time = (elapsed_time / processed_batches) * total_batches
+                remaining_time = estimated_total_time - elapsed_time
+
+                print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
+                    f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s")
+
+    if parallel:
+        print("All SLURM jobs submitted")
+
+    if return_output:
+        if parallel:
+            # Wait for all SLURM jobs to complete
+            print("Waiting for SLURM jobs to complete...")
+            # subprocess.run(['squeue', '-u', os.getenv('USER')])
+            while True:
+                # output = subprocess.check_output(['squeue', '--job', ','.join(job_ids)]).decode('utf-8')
+                # if 'PENDING' not in output and 'RUNNING' not in output:
+                #     break
+                output = subprocess.check_output(['squeue', '-u', os.getenv('USER'),
+                                                   '--format="%j,%T"']).decode('utf-8')
+                job_lines = [line for line in output.split('\n') if unique_id in line]
+                
+                if not job_lines:
+                    break
+                
+                job_states = [line.split(',')[1] for line in job_lines]
+                
+                if all(state in ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'NODE_FAIL'] for state in job_states):
+                    if any(state != 'COMPLETED' for state in job_states):
+                        raise Exception("One or more nodes did not complete successfully. Cannot return full feature list.")
+                    break
+
+                num_jobs_remaining = len([state in ['PENDING', 'RUNNING'] for state in job_states])
+                print(f"Remaining jobs: {num_jobs_remaining}", end = '\r')
+
+                time.sleep(10)  # Wait for 10 seconds before checking again
+
+            print("All SLURM jobs completed.")
+
+            # Load saved feature images and info
+            feature_images = []
+            for layer_name in layer_names:
+                layer_output_path = os.path.join(output_path, layer_name)
+                for filename in os.listdir(layer_output_path):
+                    if filename.endswith(".jpg"):
+                        image_path = os.path.join(layer_output_path, filename)
+                        info_path = os.path.splitext(image_path)[0] + ".info.json"
+                        
+                        with open(info_path, 'r') as f:
+                            info_data = json.load(f)
+                        
+                        feature_image = plt.imread(image_path)
+                        activation = info_data["Activation"]
+                        loss_values = info_data["Loss Values"]
+                        convergence_iteration = info_data["Convergence Iteration"]
+                        layer_name = info_data["Layer"]
+                        channel = info_data["Channel"]
+                        neuron = info_data["Neuron"]
+                        
+                        feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron))
+        else:
+            return feature_images
 
 def plot_feature_images(feature_images, num_columns=5, output_path=None):
     num_images = len(feature_images)
@@ -415,3 +526,10 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
             plot_feature_images(batch_feature_images, num_columns, output_path)
 
     return feature_images
+
+# For debugging
+if __name__ == "__main__":
+    model = load_resnet18()
+    feature_images = visualize_features(model, layer_names=['layer4'], batch_size=8, output_path='./feature_images/resnet18/pretrained/test',
+                                        min_iterations=25, convergence_threshold=1e-3, convergence_window=5, max_iterations=int(1e4),
+                                        lr_warmup_steps=15, parallel=True)
