@@ -15,10 +15,8 @@ import subprocess
 import random
 import string
 
-def load_resnet18(weights=None):
-    # weights = models.ResNet18_Weights.DEFAULT if weights is None else weights
-    # model = models.resnet18(weights=weights)
-    model = models.resnet18(pretrained=True)
+def load_resnet18(weights=models.ResNet18_Weights.DEFAULT):
+    model = models.resnet18(weights=weights)
     return model
 
 def preprocess_image(image):
@@ -75,7 +73,13 @@ def activation_maximization(
 ):
     # if kwargs:
     #     print("activation_maximization() received unnecessary arguments:", kwargs)
-    assert min_iterations >= convergence_window, "min_iterations must be at least 2"
+    assert min_iterations >= convergence_window, "min_iterations must be >= convergence_window"
+
+    if use_gpu is not None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
+    else:
+        use_gpu = torch.cuda.is_available()
 
     model.eval()
     target_layer = model
@@ -243,11 +247,6 @@ def activation_maximization(
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
                        checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None,
                        parallel=False, return_output=True, **kwargs):
-    if use_gpu is not None:
-        if not torch.cuda.is_available():
-            raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
-    else:
-        use_gpu = torch.cuda.is_available()
     use_all_channels = True if not channels else False
 
     if parallel:
@@ -326,18 +325,20 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
 #SBATCH --output=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.out
 #SBATCH --error=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.err
 
-python3 -c "
+cd /data/{os.getenv("USER")}/vision/
+
+python -c "
 from vision.featurevis import *
 model = load_resnet18()
 feature_images = []
 for channel, neuron in zip({batch_channels}, {batch_neurons}):
-    feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation = activation_maximization(
+    feature_image, activation, loss_values, convergence_iteration, layer_name, _, _, _ = activation_maximization(
         model, layer_name='{layer_name}', channel=channel, neuron=neuron,
         aggregation='{aggregation}', 
         checkpoint_path='{checkpoint_path}', output_path='{output_path}',
         use_gpu={use_gpu}, **{kwargs}
     )
-    feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron))
+    feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, '{aggregation}'))
 
 # Save feature images and info
 save_feature_images(feature_images, '{output_path}', {kwargs})
@@ -349,6 +350,7 @@ save_feature_images(feature_images, '{output_path}', {kwargs})
                 f.write(job_script)
                 f.close()
                 subprocess.Popen(['sbatch', job_path], stdout=subprocess.PIPE)
+                pdb.set_trace()
                 # subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE)
                 # os.remove(job_path)
                 # job_id = subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE).communicate()[0].decode('utf-8').split()[-1]

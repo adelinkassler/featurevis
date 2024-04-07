@@ -1,12 +1,18 @@
 import argparse
-from vision.featurevis import *
+from featurevis import *
+
+def parse_comma_separated_ints(string):
+    return [int(x.strip()) for x in string.split(',')]
+
+def parse_comma_separated_int_tuples(string):
+    return [tuple(int(y) for y in x.strip().split(',')) for x in string.split(';')]
 
 def main():
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
     parser.add_argument('--model', type=str, default='resnet18', help='Model name')
     parser.add_argument('--layer-names', type=str, nargs='+', help='Layer names')
-    parser.add_argument('--channels', type=int, nargs='+', help='Channels to visualize')
-    parser.add_argument('--neurons', type=int, nargs='+', help='Neurons to visualize')
+    parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma-separated list of channels to visualize')
+    parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
     parser.add_argument('--aggregation', type=str, default='average', help='Aggregation method')
     parser.add_argument('--crop-factor', type=int, default=2, help='Crop factor')
     parser.add_argument('--checkpoint-path', type=str, help='Checkpoint path')
