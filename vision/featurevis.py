@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import torch
 import torch.nn as nn
@@ -14,9 +15,15 @@ from PIL import Image
 import subprocess
 import random
 import string
+import submitit
+from itertools import product
 
 def load_resnet18(weights=models.ResNet18_Weights.DEFAULT):
     model = models.resnet18(weights=weights)
+    return model
+
+def load_inception_v3(weights=models.Inception_V3_Weights.IMAGENET1K_V1):
+    model = models.inception_v3(weights=weights)
     return model
 
 def preprocess_image(image):
@@ -36,8 +43,9 @@ def deprocess_image(image):
 
 def activation_maximization(
     # Model & objective parameters
-    model, # Passed from visualize_features
-    layer_name, # Passed from visualize_features
+    model=None, # Passed from visualize_features
+    model_path=None, # Alternative to model
+    layer_name=None, # Passed from visualize_features
     channel=None, # Passed from visualize_features. If None, uses all channels
     neuron=None, # Passed from visualize_features. If None, picks a neuron in the center
     aggregation='average',
@@ -45,7 +53,7 @@ def activation_maximization(
     max_iterations=1000,
     min_iterations=2,
     convergence_threshold=1e-4,
-    convergence_window=1,
+    convergence_window=2,
     lr_schedule=None,
     learning_rate=0.1,
     lr_decay_rate=None,
@@ -68,12 +76,17 @@ def activation_maximization(
     feature_image_size=224,
     crop_factor=2,
     # Misc arguments
-    use_gpu=None, # Set automatically by visualize_features
-    **kwargs # Absorbs unnecessary **kwargs passed from visualize_features
+    use_gpu=None, # Set automatically if argument is None
+    progress_bar=True
 ):
-    # if kwargs:
-    #     print("activation_maximization() received unnecessary arguments:", kwargs)
-    assert min_iterations >= convergence_window, "min_iterations must be >= convergence_window"
+    # Check that arguments are all legal
+    if model is None:
+        if model_path is not None:
+            model = torch.load(model_path)
+        else:
+            raise ValueError("model or model_path must be provided")
+    min_iterations = max(min_iterations, convergence_window)
+    assert convergence_window > 1, "convergence_window must be at least 2"
 
     if use_gpu is not None:
         if not torch.cuda.is_available():
@@ -215,7 +228,8 @@ def activation_maximization(
 
         loss_values.append(loss.item())
 
-        print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="")
+        if progress_bar:
+            print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="")
 
         # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
         # if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
@@ -244,9 +258,24 @@ def activation_maximization(
 
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
+def activation_maximization_batch(job_args):
+    model_path, layer_name, channels, neurons, aggregation, output_path, kwargs = job_args
+    print(f"\nStarting job for layer: {layer_name}, channels: {channels}, neurons: {neurons}, aggregation: {aggregation}",
+          f"Additional arguments: {kwargs}")
+    model = torch.load(model_path)
+    job_results = []
+    for channel, neuron in zip(channels, neurons):
+        print(f"\nProcessing channel {channel} and neuron {neuron} for layer {layer_name}")
+        result = activation_maximization(model=model, layer_name=layer_name, channel=channel, 
+                                         neuron=neuron, aggregation=aggregation, **kwargs)
+        job_results.append(result)
+        save_feature_images([result], output_path, kwargs)
+        print(f"Saved feature image for channel {channel} and neuron {neuron}")
+    return job_results
+
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
                        checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None,
-                       parallel=False, return_output=True, **kwargs):
+                       parallel=False, return_output=True, cleanup=False, **kwargs):
     use_all_channels = True if not channels else False
 
     if parallel:
@@ -254,6 +283,8 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
 
     if layer_names is None:
         layer_names = [name for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)]
+    elif isinstance(layer_names, str):
+        layer_names = [layer_names]
 
     if use_all_channels:
         channels_per_layer = []
@@ -296,66 +327,113 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
     start_time = time.time()
     processed_batches = 0
 
-    if neurons is None:
-        neurons = [None]
+    if parallel: # Parallel evaluation for slurm using submitit
+        # Serialize the model
+        model_path = f"{os.getenv('HOME')}/.tmp/model_{unique_id}.pth"
+        torch.save(model, model_path)
 
-    job_ids = []
+        # Create an instance of AutoExecutor
+        # executor_dir = output_path if output_path else 'tmp'
+        executor_dir = 'slurm'
+        executor = submitit.AutoExecutor(folder=executor_dir)
+        executor.update_parameters(timeout_min=15, slurm_partition='single', gpus_per_node=1)
 
-    for layer_idx, layer_name in enumerate(layer_names):
-        if use_all_channels:
-            channels = list(range(channels_per_layer[layer_idx]))
+        # Make sure neurons processess appropriately if neurons=None
+        neurons = neurons if neurons else [None]
 
-        for i in range(0, len(channels), batch_size):
-            batch_channels = channels[i:i+batch_size]
-            # batch_neurons = neurons[i:i+batch_size] if neurons else [None] * len(batch_channels)
-            batch_neurons = neurons
+        # Create arguments for each job
+        job_args = []
+        for layer_name in layer_names:
+            channels_neurons = list(product(channels, neurons))
+            for i in range(0, len(channels_neurons), batch_size):
+                job_channels = [c for c, _ in channels_neurons[i:i+batch_size]]
+                job_neurons = [n for _, n in channels_neurons[i:i+batch_size]]
+                job_args.append((model_path, layer_name, job_channels, job_neurons, aggregation, output_path, kwargs))
 
-            if parallel:
-                # Submit SLURM job for each batch
-                job_name = f"act_max_{unique_id}_{layer_name}_{i}"
-                job_script = f"""#!/bin/bash
-#SBATCH --job-name={job_name}
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-#SBATCH --gpus-per-task=1
-#SBATCH --mem=8G
-#SBATCH --partition=single
-#SBATCH --time=00:10:00
-#SBATCH --output=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.out
-#SBATCH --error=/data/{os.getenv("USER")}/slurm_jobs/{job_name}_%j.err
+        # Submit the job array using map_array
+        job_array = executor.map_array(activation_maximization_batch, job_args)
+        print(f"Job array submitted with ID: {job_array[0].job_id.split('_')[0]}")
 
-cd /data/{os.getenv("USER")}/vision/
+        # Wait for all jobs to complete and display progress
+        print("Waiting for all jobs to complete...")
+        num_jobs = len(job_array)
+        jobs_ended = 0
+        status_msg_len = 0
+        while jobs_ended < num_jobs:
+            job_stats = {
+                'PENDING': 0,
+                'RUNNING': 0,
+                'COMPLETED': 0,
+                'FAILED': 0,
+                'CANCELLED': 0,
+                'TIMEOUT': 0,
+                'NODE_FAIL': 0,
+                'UNKNOWN': 0
+            }
+            for job in job_array:
+                job_stats[job.state] += 1
+            jobs_ended = job_stats['COMPLETED'] + job_stats['CANCELLED'] + job_stats['FAILED'] + job_stats['TIMEOUT']
+            progress_bar = "[{0}{1}] {2}/{3} jobs finished".format(
+                "=" * (jobs_ended * 30 // num_jobs),
+                " " * ((num_jobs - jobs_ended) * 30 // num_jobs),
+                jobs_ended,
+                num_jobs
+            )
+            state_count_nonzero = []
+            state_count_labels = {'COMPLETED':'Completed', 'RUNNING':'Running', 'PENDING':'Pending', 'FAILED':'Failed',
+                                  'CANCELLED':'Cancelled', 'TIMEOUT':'Timeout', 'NODE_FAIL':'Node Failure', 'UNKNOWN':'Unknown'}
+            for state in job_stats.keys():
+                if job_stats[state] > 0:
+                    state_count_nonzero.append(f"{state_count_labels[state]}: {job_stats[state]}")
+            status_msg = f"\r{progress_bar} ({', '.join(state_count_nonzero)})"
+            print(status_msg + " "*max(status_msg_len-len(status_msg), 0), end="", flush=True)
+            status_msg_len = len(status_msg)
+            time.sleep(1)  # Wait for 1 second before updating the progress
+        print("\nAll jobs completed.")
+        if jobs_ended != job_stats['COMPLETED']:
+            print("Warning: some jobs finished with nonzero exit status", file = sys.stderr)
 
-python -c "
-from vision.featurevis import *
-model = load_resnet18()
-feature_images = []
-for channel, neuron in zip({batch_channels}, {batch_neurons}):
-    feature_image, activation, loss_values, convergence_iteration, layer_name, _, _, _ = activation_maximization(
-        model, layer_name='{layer_name}', channel=channel, neuron=neuron,
-        aggregation='{aggregation}', 
-        checkpoint_path='{checkpoint_path}', output_path='{output_path}',
-        use_gpu={use_gpu}, **{kwargs}
-    )
-    feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, '{aggregation}'))
+        # Retrieve the results
+        feature_images = []
+        for job in job_array:
+            try:
+                job_results = job.result()
+                feature_images.extend(job_results)
+            except Exception as e:
+                print(f"Job {job.job_id} failed with exception: {e}")
+                print(f"Error message: {job.stderr()}")
 
-# Save feature images and info
-save_feature_images(feature_images, '{output_path}', {kwargs})
-"
-"""
+        if cleanup: #TODO: make this section work properly
+            # Clean up temporary files
+            os.remove(model_path)
+            for job in job_array:
+                # pdb.set_trace()
+                os.remove(f"{executor_dir}/{job.job_id}_submission.sh")
+                os.remove(f"{executor_dir}/{job.job_id}*.pkl")
+                # os.remove(job.submission().paths.submitted_pickle)
+                # os.remove(job.submission().paths.stdout)
+                # os.remove(job.submission().paths.stderr)
+ 
+        if return_output:
+            return feature_images
+        
+    elif not parallel: # Sequential evaluation on one node
+        # Make sure neurons processess appropriately if neurons=None
+        neurons = neurons if neurons else [None]
+        
+        # Double check if runs will be long
+        total_n_calls = len(list(product(layer_names, channels, neurons)))
+        if total_n_calls >= 10:
+            if input(f"Run {total_n_calls} activation maximizations sequentially? [y]/n ") not in ['', 'y']:
+                exit()
 
-                job_path = os.path.expanduser(f"~/.tmp/job_script_{unique_id}.sh")
-                f = open(job_path, 'w')
-                f.write(job_script)
-                f.close()
-                subprocess.Popen(['sbatch', job_path], stdout=subprocess.PIPE)
-                pdb.set_trace()
-                # subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE)
-                # os.remove(job_path)
-                # job_id = subprocess.Popen(['sbatch', '--wrap', job_script], stdout=subprocess.PIPE).communicate()[0].decode('utf-8').split()[-1]
-                # job_ids.append(job_id)
-            else:
+        # Loop over all layers, channels, etc.
+        for layer_idx, layer_name in enumerate(layer_names):
+            if use_all_channels:
+                channels = list(range(channels_per_layer[layer_idx]))
+
+            for i in range(0, len(channels), batch_size):
+                batch_channels = channels[i:i+batch_size]
                 batch_feature_images = []
 
                 for channel in batch_channels:
@@ -368,7 +446,7 @@ save_feature_images(feature_images, '{output_path}', {kwargs})
                             input_image = input_image.unsqueeze(0) # Add batch dimension
 
                         feature_image, activation, loss_values, convergence_iteration, _, _, neuron, aggregation = activation_maximization(
-                            model, layer_name, channel, neuron, input_image=input_image, **kwargs
+                            model, None, layer_name, channel, neuron, aggregation, input_image=input_image, **kwargs
                         )
                         batch_feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation))
 
@@ -384,11 +462,10 @@ save_feature_images(feature_images, '{output_path}', {kwargs})
 
                 print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
                     f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s")
+        if return_output:
+            return feature_images
 
-    if parallel:
-        print("All SLURM jobs submitted")
-
-    if return_output:
+    if False:
         if parallel:
             # Wait for all SLURM jobs to complete
             print("Waiting for SLURM jobs to complete...")
@@ -478,10 +555,13 @@ def feature_image_paths(directory, layer_name, channel, neuron, aggregation):
 
     return filename, info_filename
 
-def save_feature_images(feature_images, checkpoint_path, params):
-    directory = f"{checkpoint_path}"
+def save_feature_images(feature_images, output_path, params):
+    if output_path is None:
+        print("No output path provided; feature images have not been saved")
+        return
+    directory = f"{output_path}"
     os.makedirs(directory, exist_ok=True)
-    print(f"save_feature_images called with checkpoint_path={checkpoint_path}")
+    print(f"save_feature_images called with output_path={output_path}")
 
     for image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation in feature_images:
         filename, info_filename = feature_image_paths(directory, layer_name, channel, neuron, aggregation)
