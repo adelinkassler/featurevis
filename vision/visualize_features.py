@@ -68,6 +68,8 @@ def main():
     match args.model:
         case 'resnet18':
             model = load_resnet18()
+        case 'inception_v3':
+            model = load_inception_v3()
         case _:
             raise ValueError(f"Model '{args.model}' is not recognized. Supported models: {', '.join(supported_models)}")
 

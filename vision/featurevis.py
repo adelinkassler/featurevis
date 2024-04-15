@@ -93,6 +93,18 @@ def activation_maximization(
             raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
     else:
         use_gpu = torch.cuda.is_available()
+    
+    # Doing this keeps the info files for the output more readable
+    if not use_jitter:
+        jitter_scale = None
+    if not use_scaling:
+        scale_range = None
+    if not use_gauss:
+        gauss_kernel_size = None
+    if not use_tv_reg:
+        tv_weight = None
+    if not use_decorrelation:
+        decorrelation_weight = None
 
     model.eval()
     target_layer = model
@@ -183,6 +195,7 @@ def activation_maximization(
         model(feature_image)
 
         # Calculate loss, including frequency regularization steps
+        # pdb.set_trace()
         loss = -torch.mean(activation)
 
         # (L2 regularization already baked into the optimizer: reg_lambda)
@@ -229,7 +242,7 @@ def activation_maximization(
         loss_values.append(loss.item())
 
         if progress_bar:
-            print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="")
+            print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="", flush=True)
 
         # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
         # if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
@@ -241,7 +254,7 @@ def activation_maximization(
         if scheduler is not None:
             scheduler.step()
 
-    print()
+    print(flush=True)
     handle.remove()
     feature_image = deprocess_image(feature_image.cpu() if use_gpu else feature_image)
     max_activation = activation.max().item()
@@ -290,6 +303,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         channels_per_layer = []
         for layer_name in layer_names:
             target_layer = model
+            #pdb.set_trace()
             for submodule in layer_name.split('.'):
                 target_layer = target_layer._modules.get(submodule)
             
@@ -407,7 +421,6 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
             # Clean up temporary files
             os.remove(model_path)
             for job in job_array:
-                # pdb.set_trace()
                 os.remove(f"{executor_dir}/{job.job_id}_submission.sh")
                 os.remove(f"{executor_dir}/{job.job_id}*.pkl")
                 # os.remove(job.submission().paths.submitted_pickle)
@@ -461,7 +474,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 remaining_time = estimated_total_time - elapsed_time
 
                 print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
-                    f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s")
+                    f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s", flush=True)
         if return_output:
             return feature_images
 
@@ -611,7 +624,5 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
 
 # For debugging
 if __name__ == "__main__":
-    model = load_resnet18()
-    feature_images = visualize_features(model, layer_names=['layer4'], batch_size=8, output_path='./feature_images/resnet18/pretrained/test',
-                                        min_iterations=25, convergence_threshold=1e-3, convergence_window=5, max_iterations=int(1e4),
-                                        lr_warmup_steps=15, parallel=True)
+    model = load_inception_v3()
+    visualize_features(model, layer_names=['AuxLogits.conv0.conv'])

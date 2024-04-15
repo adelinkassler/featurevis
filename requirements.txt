@@ -10,6 +10,7 @@ fsspec @ file:///home/conda/feedstock_root/build_artifacts/fsspec_1710808267764/
 gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1666808665953/work
 idna @ file:///home/conda/feedstock_root/build_artifacts/idna_1701026962277/work
 Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/jinja2_1704966972576/work
+joblib @ file:///home/conda/feedstock_root/build_artifacts/joblib_1712597192451/work
 kiwisolver @ file:///home/conda/feedstock_root/build_artifacts/kiwisolver_1695379920604/work
 MarkupSafe @ file:///home/conda/feedstock_root/build_artifacts/markupsafe_1706899926732/work
 matplotlib @ file:///home/conda/feedstock_root/build_artifacts/matplotlib-suite_1708026439111/work
@@ -26,10 +27,13 @@ PyQt5-sip==12.12.2
 PySocks @ file:///home/conda/feedstock_root/build_artifacts/pysocks_1661604839144/work
 python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/python-dateutil_1709299778482/work
 requests @ file:///home/conda/feedstock_root/build_artifacts/requests_1684774241324/work
+scikit-learn @ file:///home/conda/feedstock_root/build_artifacts/scikit-learn_1712824570690/work
+scipy @ file:///home/conda/feedstock_root/build_artifacts/scipy-split_1712255248371/work/dist/scipy-1.13.0-cp311-cp311-linux_x86_64.whl#sha256=1f52d768ff23a2df0b51ba36341f4bd7f831e98f0c5c8636112da257dd5998e9
 sip @ file:///home/conda/feedstock_root/build_artifacts/sip_1697300428897/work
 six @ file:///home/conda/feedstock_root/build_artifacts/six_1620240208055/work
 submitit @ file:///home/conda/feedstock_root/build_artifacts/submitit_1700812531904/work
 sympy @ file:///home/conda/feedstock_root/build_artifacts/sympy_1684180540116/work
+threadpoolctl @ file:///home/conda/feedstock_root/build_artifacts/threadpoolctl_1710943558485/work
 toml @ file:///home/conda/feedstock_root/build_artifacts/toml_1604308577558/work
 tomli @ file:///home/conda/feedstock_root/build_artifacts/tomli_1644342247877/work
 torch @ file:///home/conda/feedstock_root/build_artifacts/libtorch_1706665913501/work
