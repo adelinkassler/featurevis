@@ -26,6 +26,33 @@ def load_inception_v3(weights=models.Inception_V3_Weights.IMAGENET1K_V1):
     model = models.inception_v3(weights=weights)
     return model
 
+def load_model(model = None, path = None, weights = 'default'):
+    if path is not None:
+        if model is not None:
+            print(f"Ignoring argument model={model}; loading model from path {path}")
+        return torch.load(path)
+
+    default_weights = {
+        'resnet18': models.ResNet18_Weights.DEFAULT,
+        'resnet50': models.ResNet50_Weights.DEFAULT,
+        'inception_v3': models.Inception_V3_Weights.IMAGENET1K_V1
+    }
+    if weights == 'default':
+        weights = default_weights[model]
+
+    match model:
+        case 'resnet18':
+            model = load_resnet18(weights=weights)
+        case 'resnet50':
+            model = models.resnet50(weights=weights)
+        case 'inception_v3':
+            model = load_inception_v3(weights=weights)
+        case _:
+            raise ValueError(f"Model '{model}' is not recognized. Supported models: {', '.join(default_weights.keys())} or provide path to stored model")
+        
+    return model
+
+
 def preprocess_image(image):
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -85,7 +112,7 @@ def activation_maximization(
             model = torch.load(model_path)
         else:
             raise ValueError("model or model_path must be provided")
-    min_iterations = max(min_iterations, convergence_window)
+    min_iterations = max(min_iterations, convergence_window, lr_warmup_steps)
     assert convergence_window > 1, "convergence_window must be at least 2"
 
     if use_gpu is not None:
@@ -289,7 +316,7 @@ def activation_maximization_batch(job_args):
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
                        checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None,
                        parallel=False, return_output=True, cleanup=False, **kwargs):
-    use_all_channels = True if not channels else False
+    use_all_channels = True if channels is None else False
 
     if parallel:
         unique_id = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
@@ -300,10 +327,10 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         layer_names = [layer_names]
 
     if use_all_channels:
-        channels_per_layer = []
+        print("Using all convulational channels")
+        channels_per_layer = {}
         for layer_name in layer_names:
             target_layer = model
-            #pdb.set_trace()
             for submodule in layer_name.split('.'):
                 target_layer = target_layer._modules.get(submodule)
             
@@ -329,9 +356,9 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 # next
                 raise ValueError(f"Unsupported layer type: {type(target_layer)}")
             
-            channels_per_layer.append(num_channels)
+            channels_per_layer[layer_name] = num_channels
         
-        total_batches = sum(len(range(0, channels, batch_size)) for channels in channels_per_layer)
+        total_batches = sum(len(range(0, channels, batch_size)) for channels in channels_per_layer.values())
     elif channels is None:
         raise ValueError("Please provide either the 'channels' argument or set 'use_all_channels' to True.")
     else:
@@ -358,6 +385,8 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         # Create arguments for each job
         job_args = []
         for layer_name in layer_names:
+            if channels is None:
+                channels = list(range(channels_per_layer[layer_name]))
             channels_neurons = list(product(channels, neurons))
             for i in range(0, len(channels_neurons), batch_size):
                 job_channels = [c for c, _ in channels_neurons[i:i+batch_size]]

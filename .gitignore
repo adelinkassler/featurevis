@@ -4,6 +4,7 @@
 feature_images/*
 .oldvenv/*
 slurm/*
+models/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

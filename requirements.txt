@@ -1,3 +1,5 @@
+boto3 @ file:///home/conda/feedstock_root/build_artifacts/boto3_1713924693901/work
+botocore @ file:///home/conda/feedstock_root/build_artifacts/botocore_1713915146627/work
 Brotli @ file:///home/conda/feedstock_root/build_artifacts/brotli-split_1695989787169/work
 certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1707022139797/work/certifi
 charset-normalizer @ file:///home/conda/feedstock_root/build_artifacts/charset-normalizer_1698833585322/work
@@ -10,6 +12,7 @@ fsspec @ file:///home/conda/feedstock_root/build_artifacts/fsspec_1710808267764/
 gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1666808665953/work
 idna @ file:///home/conda/feedstock_root/build_artifacts/idna_1701026962277/work
 Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/jinja2_1704966972576/work
+jmespath @ file:///home/conda/feedstock_root/build_artifacts/jmespath_1655568249366/work
 joblib @ file:///home/conda/feedstock_root/build_artifacts/joblib_1712597192451/work
 kiwisolver @ file:///home/conda/feedstock_root/build_artifacts/kiwisolver_1695379920604/work
 MarkupSafe @ file:///home/conda/feedstock_root/build_artifacts/markupsafe_1706899926732/work
@@ -27,6 +30,7 @@ PyQt5-sip==12.12.2
 PySocks @ file:///home/conda/feedstock_root/build_artifacts/pysocks_1661604839144/work
 python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/python-dateutil_1709299778482/work
 requests @ file:///home/conda/feedstock_root/build_artifacts/requests_1684774241324/work
+s3transfer @ file:///home/conda/feedstock_root/build_artifacts/s3transfer_1710497251148/work
 scikit-learn @ file:///home/conda/feedstock_root/build_artifacts/scikit-learn_1712824570690/work
 scipy @ file:///home/conda/feedstock_root/build_artifacts/scipy-split_1712255248371/work/dist/scipy-1.13.0-cp311-cp311-linux_x86_64.whl#sha256=1f52d768ff23a2df0b51ba36341f4bd7f831e98f0c5c8636112da257dd5998e9
 sip @ file:///home/conda/feedstock_root/build_artifacts/sip_1697300428897/work

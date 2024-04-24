@@ -14,15 +14,16 @@ def parse_comma_separated_strs(string):
 
 def main():
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
-    parser.add_argument('--model', type=str, default='resnet18', help='Model name')
-    parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma-separated list of layer names')
-    parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma-separated list of channels to visualize')
+    parser.add_argument('--model', type=str, help='Model name')
+    parser.add_argument('--model-path', type=str, help='Path to saved pytorch model')
+    parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
+    parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
     parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
     parser.add_argument('--aggregation', type=str, default='average', help='Aggregation method')
     parser.add_argument('--crop-factor', type=int, default=2, help='Crop factor')
     parser.add_argument('--checkpoint-path', type=str, help='Checkpoint path')
     parser.add_argument('--output-path', type=str, help='Output path')
-    parser.add_argument('--batch-size', type=int, default=10, help='Batch size')
+    parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
     parser.add_argument('--use-gpu', action='store_true', help='Use GPU')
     parser.add_argument('--parallel', action='store_true', help='Run in parallel using SLURM')
 
@@ -47,7 +48,7 @@ def main():
     parser.add_argument('--gauss-kernel-size', type=int, default=3, help='Gaussian kernel size')
     parser.add_argument('--use-tv-reg', action='store_true', help='Use total variation regularization')
     parser.add_argument('--tv-weight', type=float, default=1e-6, help='Total variation regularization weight')
-    parser.add_argument('--use-decorrelation', action='store_true', help='Use decorrelation regularization')
+    parser.add_argument('--use-decorrelation', action='store_true', help='Use decorrelation regularization (NOT SUPPORTED)')
     parser.add_argument('--decorrelation-weight', type=float, default=0.1, help='Decorrelation regularization weight')
 
     # Image parameters # TODO: double check
@@ -61,17 +62,10 @@ def main():
     args = parser.parse_args()
 
     if args.output_path is None:
-        if input("Output path has not been set. Continue without saving results? y/[n] ") != 'y':
+        if input("--output-path has not been set. Continue without saving results? y/[n] ") != 'y':
             exit()
 
-    supported_models = ['resnet18']
-    match args.model:
-        case 'resnet18':
-            model = load_resnet18()
-        case 'inception_v3':
-            model = load_inception_v3()
-        case _:
-            raise ValueError(f"Model '{args.model}' is not recognized. Supported models: {', '.join(supported_models)}")
+    model = load_model(args.model, args.model_path)
 
     act_max_params = {
         'max_iterations': args.max_iterations,
@@ -101,7 +95,7 @@ def main():
         'progress_bar': args.progress_bar
     }
 
-    visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
+    visualize_features(model, model_path=args.model_path, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
                        aggregation=args.aggregation, crop_factor=args.crop_factor,
                        checkpoint_path=args.checkpoint_path, output_path=args.output_path,
                        batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
