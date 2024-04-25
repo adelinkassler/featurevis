@@ -17,6 +17,7 @@ import random
 import string
 import submitit
 from itertools import product
+from functools import partial
 
 def load_torchvision_model(model_name, checkpoint_path=None, device='cpu'):
     # Loads a torchvision model using default weights or a checkpoint file
@@ -292,27 +293,35 @@ def activation_maximization(
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
 def activation_maximization_batch(job_args):
-    model_path, layer_name, channels, neurons, aggregation, output_path, kwargs = job_args
+    model_path, layer_name, channels, neurons, aggregation, output_path, image_loader, kwargs = job_args
     print(f"\nStarting job for layer: {layer_name}, channels: {channels}, neurons: {neurons}, aggregation: {aggregation}",
           f"Additional arguments: {kwargs}")
     model = torch.load(model_path)
     job_results = []
     for channel, neuron in zip(channels, neurons):
+        input_image = image_loader(layer_name, channel, neuron, aggregation) if image_loader is not None else None
         print(f"\nProcessing channel {channel} and neuron {neuron} for layer {layer_name}")
         result = activation_maximization(model=model, layer_name=layer_name, channel=channel, 
-                                         neuron=neuron, aggregation=aggregation, **kwargs)
+                                         neuron=neuron, aggregation=aggregation, input_image=input_image,
+                                         **kwargs)
         job_results.append(result)
         save_feature_images([result], output_path, kwargs)
         print(f"Saved feature image for channel {channel} and neuron {neuron}")
     return job_results
 
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
-                       init_images_dir=None, output_path=None, batch_size=10, use_gpu=None,
+                       init_image_loader=None, output_path=None, batch_size=10, use_gpu=None,
                        parallel=False, return_output=True, cleanup=False, **kwargs):
     use_all_channels = True if channels is None else False
 
+    # For parallel, a random tag to include in file names
     if parallel:
         unique_id = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+
+    # # Define an image loader
+    # if init_image_loader is not None:
+    #     def init_image_loader(layer_name, channel, neuron, aggregation):
+    #         #TODO: currying of generic images loader
 
     if layer_names is None:
         layer_names = [name for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)]
@@ -384,7 +393,8 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
             for i in range(0, len(channels_neurons), batch_size):
                 job_channels = [c for c, _ in channels_neurons[i:i+batch_size]]
                 job_neurons = [n for _, n in channels_neurons[i:i+batch_size]]
-                job_args.append((model_path, layer_name, job_channels, job_neurons, aggregation, output_path, kwargs))
+                job_args.append((model_path, layer_name, job_channels, job_neurons, aggregation, output_path, 
+                                 init_image_loader, kwargs))
 
         # Submit the job array using map_array
         job_array = executor.map_array(activation_maximization_batch, job_args)
@@ -474,11 +484,13 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 for channel in batch_channels:
                     for neuron in neurons:
                         input_image = None
-                        if init_images_dir is not None:
-                            input_image = load_feature_image(init_images_dir, layer_name, channel, neuron, aggregation)
-                            input_image = torch.from_numpy(input_image).float()
-                            input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
-                            input_image = input_image.unsqueeze(0) # Add batch dimension
+                        if init_image_loader is not None:
+                            input_image = init_image_loader(layer_name, channel, neuron, aggregation)
+                            input_image = process_feature_image_for_input(input_image)
+                            # input_image = load_feature_image(images_dir, layer_name, channel, neuron, aggregation)
+                            # input_image = torch.from_numpy(input_image).float()
+                            # input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
+                            # input_image = input_image.unsqueeze(0) # Add batch dimension
 
                         feature_image, activation, loss_values, convergence_iteration, _, _, neuron, aggregation = activation_maximization(
                             model, None, layer_name, channel, neuron, aggregation, input_image=input_image, **kwargs
@@ -498,60 +510,6 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
                     f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s", flush=True)
         if return_output:
-            return feature_images
-
-    if False:
-        if parallel:
-            # Wait for all SLURM jobs to complete
-            print("Waiting for SLURM jobs to complete...")
-            # subprocess.run(['squeue', '-u', os.getenv('USER')])
-            while True:
-                # output = subprocess.check_output(['squeue', '--job', ','.join(job_ids)]).decode('utf-8')
-                # if 'PENDING' not in output and 'RUNNING' not in output:
-                #     break
-                output = subprocess.check_output(['squeue', '-u', os.getenv('USER'),
-                                                   '--format="%j,%T"']).decode('utf-8')
-                job_lines = [line for line in output.split('\n') if unique_id in line]
-                
-                if not job_lines:
-                    break
-                
-                job_states = [line.split(',')[1] for line in job_lines]
-                
-                if all(state in ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'NODE_FAIL'] for state in job_states):
-                    if any(state != 'COMPLETED' for state in job_states):
-                        raise Exception("One or more nodes did not complete successfully. Cannot return full feature list.")
-                    break
-
-                num_jobs_remaining = len([state in ['PENDING', 'RUNNING'] for state in job_states])
-                print(f"Remaining jobs: {num_jobs_remaining}", end = '\r')
-
-                time.sleep(10)  # Wait for 10 seconds before checking again
-
-            print("All SLURM jobs completed.")
-
-            # Load saved feature images and info
-            feature_images = []
-            for layer_name in layer_names:
-                layer_output_path = os.path.join(output_path, layer_name)
-                for filename in os.listdir(layer_output_path):
-                    if filename.endswith(".jpg"):
-                        image_path = os.path.join(layer_output_path, filename)
-                        info_path = os.path.splitext(image_path)[0] + ".info.json"
-                        
-                        with open(info_path, 'r') as f:
-                            info_data = json.load(f)
-                        
-                        feature_image = plt.imread(image_path)
-                        activation = info_data["Activation"]
-                        loss_values = info_data["Loss Values"]
-                        convergence_iteration = info_data["Convergence Iteration"]
-                        layer_name = info_data["Layer"]
-                        channel = info_data["Channel"]
-                        neuron = info_data["Neuron"]
-                        
-                        feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron))
-        else:
             return feature_images
 
 def plot_feature_images(feature_images, num_columns=5, output_path=None):
@@ -614,10 +572,38 @@ def save_feature_images(feature_images, output_path, params):
         with open(info_filename, 'w') as file:
             json.dump(info_data, file)
 
-def load_feature_image(images_dir, layer_name, channel, neuron, aggregation):
-    filename, _ = feature_image_paths(images_dir, layer_name, channel, neuron, aggregation)
+def load_feature_image(image_dir, layer_name, channel, neuron, aggregation):
+    filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation)
     image = plt.imread(filename)
     return image
+
+def process_feature_image_for_input(image):
+    # Preprocess feature image for use as an input image to activation_maximization
+    image = torch.from_numpy(image).float()
+    image = image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
+    image = image.unsqueeze(0) # Add batch dimension
+    return image
+
+def make_feature_image_loader_with_fallback(image_dirs):
+    def image_loader(layer_name, channel, neuron, aggregation):
+        assert isinstance(image_dirs, list) and isinstance(image_dirs[0], str), \
+            "Incorrectly formatted argument to image loader"
+        i = 0
+        image = None
+        for path in reversed(image_dirs):
+            try:
+                i += 1
+                image = load_feature_image(path, layer_name, channel, neuron, aggregation)
+                image = process_feature_image_for_input(image)
+                break
+            except:
+                next
+        if image is None:
+            print("Could not find a feature image in any of the provided paths")
+        elif i>1:
+            print(f"Could not load feature image from {image_dirs[-1]}, going back {i} checkpoints to {image_dirs[-i]}")
+        return image
+    return image_loader
 
 def plot_saved_feature_images(images_dir, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10, output_path=None):
     feature_images = []

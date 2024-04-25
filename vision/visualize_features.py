@@ -2,6 +2,7 @@ import sys, os
 sys.path.append(f"{os.getenv('HOME')}/vision/")
 from vision.featurevis import *
 import argparse
+import pdb
 
 def parse_comma_separated_ints(string):
     return [int(x.strip()) for x in string.split(',')]
@@ -16,12 +17,14 @@ def main():
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
     parser.add_argument('--model', type=str, help='Model name (must match class name in torchvision)')
     parser.add_argument('--checkpoint-path', type=str, help='Path to saved pytorch model')
-    parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
-    parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
+    parser.add_argument('--layer-names', type=str, nargs='+', help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
+    parser.add_argument('--channels', type=str, nargs='+', help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
+    # parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
+    # parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
     parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
     parser.add_argument('--aggregation', type=str, default='average', help='Aggregation method')
     parser.add_argument('--crop-factor', type=int, default=2, help='Crop factor')
-    parser.add_argument('--init-images-dir', type=str, help='Path to directory of feature images to load as starting point')
+    parser.add_argument('--init-images-dir', type=str, nargs='+', help='Path to directory of feature images to load as starting point (or a list of such paths, for fallback dirs)')
     parser.add_argument('--output-path', type=str, help='Output path')
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
     parser.add_argument('--use-gpu', action='store_true', help='Use GPU')
@@ -64,6 +67,11 @@ def main():
     if args.output_path is None:
         if input("--output-path has not been set. Continue without saving results? y/[n] ") != 'y':
             exit()
+    
+    # Create a loader function for initial images
+    init_image_loader = make_feature_image_loader_with_fallback(args.init_images_dir) if \
+        args.init_images_dir is not None else None
+    pdb.set_trace()
 
     model = load_torchvision_model(args.model, args.checkpoint_path)
 
@@ -97,7 +105,7 @@ def main():
 
     visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
                        aggregation=args.aggregation, crop_factor=args.crop_factor,
-                       init_images_dir=args.init_images_dir, output_path=args.output_path,
+                       init_image_loader=init_image_loader, output_path=args.output_path,
                        batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
                        **act_max_params)
 
