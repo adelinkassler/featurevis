@@ -18,40 +18,33 @@ import string
 import submitit
 from itertools import product
 
-def load_resnet18(weights=models.ResNet18_Weights.DEFAULT):
-    model = models.resnet18(weights=weights)
+def load_torchvision_model(model_name, checkpoint_path=None, device='cpu'):
+    # Loads a torchvision model using default weights or a checkpoint file
+    if hasattr(models, model_name):
+        model_class = getattr(models, model_name)
+    else:
+        raise ValueError(f"Could not find model torchvision.models.{model_name}")
+
+    if checkpoint_path is None:
+        weights_class = None
+        for attr_name in dir(models):
+            if attr_name.upper().startswith(model_name.upper()) and attr_name.endswith('_Weights'):
+                weights_class = getattr(models, attr_name)
+                break
+
+        if weights_class is None:
+            raise ValueError(f"Could not find weights for {model_name} in torchvision.models")
+
+        model = model_class(weights=weights_class.DEFAULT)
+        print(f"Loaded {model_name} from torchvision with default weights")
+    else:
+        model = model_class()
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded {model_name} from torchvision and checkpoint at {checkpoint_path}")
+       
+    model.to(device)
     return model
-
-def load_inception_v3(weights=models.Inception_V3_Weights.IMAGENET1K_V1):
-    model = models.inception_v3(weights=weights)
-    return model
-
-def load_model(model = None, path = None, weights = 'default'):
-    if path is not None:
-        if model is not None:
-            print(f"Ignoring argument model={model}; loading model from path {path}")
-        return torch.load(path)
-
-    default_weights = {
-        'resnet18': models.ResNet18_Weights.DEFAULT,
-        'resnet50': models.ResNet50_Weights.DEFAULT,
-        'inception_v3': models.Inception_V3_Weights.IMAGENET1K_V1
-    }
-    if weights == 'default':
-        weights = default_weights[model]
-
-    match model:
-        case 'resnet18':
-            model = load_resnet18(weights=weights)
-        case 'resnet50':
-            model = models.resnet50(weights=weights)
-        case 'inception_v3':
-            model = load_inception_v3(weights=weights)
-        case _:
-            raise ValueError(f"Model '{model}' is not recognized. Supported models: {', '.join(default_weights.keys())} or provide path to stored model")
-        
-    return model
-
 
 def preprocess_image(image):
     transform = transforms.Compose([
@@ -314,7 +307,7 @@ def activation_maximization_batch(job_args):
     return job_results
 
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
-                       checkpoint_path=None, output_path=None, batch_size=10, use_gpu=None,
+                       init_images_dir=None, output_path=None, batch_size=10, use_gpu=None,
                        parallel=False, return_output=True, cleanup=False, **kwargs):
     use_all_channels = True if channels is None else False
 
@@ -481,8 +474,8 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                 for channel in batch_channels:
                     for neuron in neurons:
                         input_image = None
-                        if checkpoint_path is not None:
-                            input_image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
+                        if init_images_dir is not None:
+                            input_image = load_feature_image(init_images_dir, layer_name, channel, neuron, aggregation)
                             input_image = torch.from_numpy(input_image).float()
                             input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
                             input_image = input_image.unsqueeze(0) # Add batch dimension
@@ -621,12 +614,12 @@ def save_feature_images(feature_images, output_path, params):
         with open(info_filename, 'w') as file:
             json.dump(info_data, file)
 
-def load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation):
-    filename, _ = feature_image_paths(checkpoint_path, layer_name, channel, neuron, aggregation)
+def load_feature_image(images_dir, layer_name, channel, neuron, aggregation):
+    filename, _ = feature_image_paths(images_dir, layer_name, channel, neuron, aggregation)
     image = plt.imread(filename)
     return image
 
-def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10, output_path=None):
+def plot_saved_feature_images(images_dir, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10, output_path=None):
     feature_images = []
 
     for layer_name in layer_names:
@@ -636,8 +629,8 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
 
             for channel in batch_channels:
                 for neuron in neurons:
-                    image = load_feature_image(checkpoint_path, layer_name, channel, neuron, aggregation)
-                    _, info_filename = feature_image_paths(checkpoint_path, layer_name, channel, neuron, aggregation)
+                    image = load_feature_image(images_dir, layer_name, channel, neuron, aggregation)
+                    _, info_filename = feature_image_paths(images_dir, layer_name, channel, neuron, aggregation)
                     with open(info_filename, 'r') as file:
                         info_data = json.load(file)
                         activation = info_data["Activation"]
@@ -653,5 +646,5 @@ def plot_feature_images_from_checkpoint(checkpoint_path, layer_names, channels, 
 
 # For debugging
 if __name__ == "__main__":
-    model = load_inception_v3()
+    model = load_torchvision_model('inception_v3')
     visualize_features(model, layer_names=['AuxLogits.conv0.conv'])
