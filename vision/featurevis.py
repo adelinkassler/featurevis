@@ -19,7 +19,7 @@ import submitit
 from itertools import product
 from functools import partial
 
-def load_torchvision_model(model_name, checkpoint_path=None, device='cpu'):
+def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbose=True):
     # Loads a torchvision model using default weights or a checkpoint file
     if hasattr(models, model_name):
         model_class = getattr(models, model_name)
@@ -37,12 +37,14 @@ def load_torchvision_model(model_name, checkpoint_path=None, device='cpu'):
             raise ValueError(f"Could not find weights for {model_name} in torchvision.models")
 
         model = model_class(weights=weights_class.DEFAULT)
-        print(f"Loaded {model_name} from torchvision with default weights")
+        if verbose:
+            print(f"Loaded {model_name} from torchvision with default weights")
     else:
         model = model_class()
         checkpoint = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded {model_name} from torchvision and checkpoint at {checkpoint_path}")
+        if verbose:
+            print(f"Loaded {model_name} from torchvision and checkpoint at {checkpoint_path}")
        
     model.to(device)
     return model
@@ -98,8 +100,11 @@ def activation_maximization(
     crop_factor=2,
     # Misc arguments
     use_gpu=None, # Set automatically if argument is None
-    progress_bar=True
+    progress_bar=True,
+    seed=None
 ):
+    if seed is not None:
+        random.seed(seed)
     # Check that arguments are all legal
     if model is None:
         if model_path is not None:
@@ -400,44 +405,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         job_array = executor.map_array(activation_maximization_batch, job_args)
         print(f"Job array submitted with ID: {job_array[0].job_id.split('_')[0]}")
 
-        # Wait for all jobs to complete and display progress
-        print("Waiting for all jobs to complete...")
-        num_jobs = len(job_array)
-        jobs_ended = 0
-        status_msg_len = 0
-        while jobs_ended < num_jobs:
-            job_stats = {
-                'PENDING': 0,
-                'RUNNING': 0,
-                'COMPLETED': 0,
-                'FAILED': 0,
-                'CANCELLED': 0,
-                'TIMEOUT': 0,
-                'NODE_FAIL': 0,
-                'UNKNOWN': 0
-            }
-            for job in job_array:
-                job_stats[job.state] += 1
-            jobs_ended = job_stats['COMPLETED'] + job_stats['CANCELLED'] + job_stats['FAILED'] + job_stats['TIMEOUT']
-            progress_bar = "[{0}{1}] {2}/{3} jobs finished".format(
-                "=" * (jobs_ended * 30 // num_jobs),
-                " " * ((num_jobs - jobs_ended) * 30 // num_jobs),
-                jobs_ended,
-                num_jobs
-            )
-            state_count_nonzero = []
-            state_count_labels = {'COMPLETED':'Completed', 'RUNNING':'Running', 'PENDING':'Pending', 'FAILED':'Failed',
-                                  'CANCELLED':'Cancelled', 'TIMEOUT':'Timeout', 'NODE_FAIL':'Node Failure', 'UNKNOWN':'Unknown'}
-            for state in job_stats.keys():
-                if job_stats[state] > 0:
-                    state_count_nonzero.append(f"{state_count_labels[state]}: {job_stats[state]}")
-            status_msg = f"\r{progress_bar} ({', '.join(state_count_nonzero)})"
-            print(status_msg + " "*max(status_msg_len-len(status_msg), 0), end="", flush=True)
-            status_msg_len = len(status_msg)
-            time.sleep(1)  # Wait for 1 second before updating the progress
-        print("\nAll jobs completed.")
-        if jobs_ended != job_stats['COMPLETED']:
-            print("Warning: some jobs finished with nonzero exit status", file = sys.stderr)
+        return job_array
 
         # Retrieve the results
         feature_images = []
@@ -511,6 +479,46 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                     f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s", flush=True)
         if return_output:
             return feature_images
+
+def track_job_array_progress(job_arrays):
+    print("Waiting for all jobs to complete...")
+    num_jobs = sum(len(job_array) for job_array in job_arrays)
+    jobs_ended = 0
+    status_msg_len = 0
+    while jobs_ended < num_jobs:
+        job_stats = {
+            'PENDING': 0,
+            'RUNNING': 0,
+            'COMPLETED': 0,
+            'FAILED': 0,
+            'CANCELLED': 0,
+            'TIMEOUT': 0,
+            'NODE_FAIL': 0,
+            'UNKNOWN': 0
+        }
+        for job_array in job_arrays:
+            for job in job_array:
+                job_stats[job.state] += 1
+        jobs_ended = job_stats['COMPLETED'] + job_stats['CANCELLED'] + job_stats['FAILED'] + job_stats['TIMEOUT']
+        progress_bar = "[{0}{1}] {2}/{3} jobs finished".format(
+            "=" * (jobs_ended * 30 // num_jobs),
+            " " * ((num_jobs - jobs_ended) * 30 // num_jobs),
+            jobs_ended,
+            num_jobs
+        )
+        state_count_nonzero = []
+        state_count_labels = {'COMPLETED':'Completed', 'RUNNING':'Running', 'PENDING':'Pending', 'FAILED':'Failed',
+                              'CANCELLED':'Cancelled', 'TIMEOUT':'Timeout', 'NODE_FAIL':'Node Failure', 'UNKNOWN':'Unknown'}
+        for state in job_stats.keys():
+            if job_stats[state] > 0:
+                state_count_nonzero.append(f"{state_count_labels[state]}: {job_stats[state]}")
+        status_msg = f"\r{progress_bar} ({', '.join(state_count_nonzero)})"
+        print(status_msg + " "*max(status_msg_len-len(status_msg), 0), end="", flush=True)
+        status_msg_len = len(status_msg)
+        time.sleep(1)  # Wait for 1 second before updating the progress
+    print("\nAll jobs completed.")
+    if jobs_ended != job_stats['COMPLETED']:
+        print("Warning: some jobs finished with nonzero exit status", file=sys.stderr)
 
 def plot_feature_images(feature_images, num_columns=5, output_path=None):
     num_images = len(feature_images)

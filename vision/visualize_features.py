@@ -16,9 +16,9 @@ def parse_comma_separated_strs(string):
 def main():
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
     parser.add_argument('--model', type=str, help='Model name (must match class name in torchvision)')
-    parser.add_argument('--checkpoint-path', type=str, help='Path to saved pytorch model')
-    parser.add_argument('--layer-names', type=str, nargs='+', help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
-    parser.add_argument('--channels', type=str, nargs='+', help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
+    parser.add_argument('--checkpoint-path', type=str, nargs='+', help='Path to saved pytorch model')
+    parser.add_argument('--layer-names', '--layers', type=str, nargs='+', help='Whitespace-separated list of layer names (defaults to all convolational layers)')
+    parser.add_argument('--channels', type=int, nargs='+', help='Whitespace-separated list of channels to visualize (defaults to all channels)')
     # parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
     # parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
     parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
@@ -29,6 +29,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
     parser.add_argument('--use-gpu', action='store_true', help='Use GPU')
     parser.add_argument('--parallel', action='store_true', help='Run in parallel using SLURM')
+    parser.add_argument('--seed', type=int, help='Set seed for activation maximization function')
 
     # Optimizer and convergence parameters
     parser.add_argument('--max-iterations', type=int, default=1000, help='Maximum number of iterations')
@@ -71,9 +72,6 @@ def main():
     # Create a loader function for initial images
     init_image_loader = make_feature_image_loader_with_fallback(args.init_images_dir) if \
         args.init_images_dir is not None else None
-    pdb.set_trace()
-
-    model = load_torchvision_model(args.model, args.checkpoint_path)
 
     act_max_params = {
         'max_iterations': args.max_iterations,
@@ -100,14 +98,39 @@ def main():
         'feature_image_size': args.feature_image_size,
         # 'crop_factor': args.crop_factor,
         # 'use_gpu': args.use_gpu,
-        'progress_bar': args.progress_bar
+        'progress_bar': args.progress_bar,
+        'seed': args.seed
     }
 
-    visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
-                       aggregation=args.aggregation, crop_factor=args.crop_factor,
-                       init_image_loader=init_image_loader, output_path=args.output_path,
-                       batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
-                       **act_max_params)
+    if not args.parallel:
+        raise Exception("Non-parallel execution not currently supported")
+
+    job_arrays = []
+    if args.checkpoint_path:
+        checkpoint_paths = args.checkpoint_path
+        for checkpoint_path in checkpoint_paths:
+            try:
+                output_path = os.path.join(args.output_path, os.path.basename(checkpoint_path))
+                model = load_torchvision_model(args.model, checkpoint_path)
+                job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
+                                            aggregation=args.aggregation, crop_factor=args.crop_factor,
+                                            init_image_loader=init_image_loader, output_path=output_path,
+                                            batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
+                                            **act_max_params)
+                job_arrays.append(job_array)
+            except:
+                print(f"Exception reached for {checkpoint_path}")
+    else:
+        model = load_torchvision_model(args.model)
+        job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
+                                        aggregation=args.aggregation, crop_factor=args.crop_factor,
+                                        init_image_loader=init_image_loader, output_path=output_path,
+                                        batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
+                                        **act_max_params)
+        job_arrays.append(job_array)
+    
+    if args.parallel:
+        track_job_array_progress(job_arrays)
 
 if __name__ == '__main__':
     main()
