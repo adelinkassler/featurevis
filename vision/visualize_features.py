@@ -102,9 +102,6 @@ def main():
         'seed': args.seed
     }
 
-    if not args.parallel:
-        raise Exception("Non-parallel execution not currently supported")
-
     job_arrays = []
     if args.checkpoint_path:
         checkpoint_paths = args.checkpoint_path
@@ -124,7 +121,7 @@ def main():
         model = load_torchvision_model(args.model)
         job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
                                         aggregation=args.aggregation, crop_factor=args.crop_factor,
-                                        init_image_loader=init_image_loader, output_path=output_path,
+                                        init_image_loader=init_image_loader, output_path=args.output_path,
                                         batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
                                         **act_max_params)
         job_arrays.append(job_array)

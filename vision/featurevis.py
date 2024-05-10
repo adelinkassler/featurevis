@@ -12,9 +12,7 @@ from typing import List, Tuple
 import pdb
 import json
 from PIL import Image
-import subprocess
 import random
-import string
 import submitit
 from itertools import product
 from functools import partial
@@ -25,14 +23,14 @@ def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbo
         model_class = getattr(models, model_name)
     else:
         raise ValueError(f"Could not find model torchvision.models.{model_name}")
-
+    
     if checkpoint_path is None:
         weights_class = None
         for attr_name in dir(models):
             if attr_name.upper().startswith(model_name.upper()) and attr_name.endswith('_Weights'):
                 weights_class = getattr(models, attr_name)
                 break
-
+        
         if weights_class is None:
             raise ValueError(f"Could not find weights for {model_name} in torchvision.models")
 
@@ -45,7 +43,7 @@ def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbo
         model.load_state_dict(checkpoint['model_state_dict'])
         if verbose:
             print(f"Loaded {model_name} from torchvision and checkpoint at {checkpoint_path}")
-       
+
     model.to(device)
     return model
 
@@ -114,11 +112,15 @@ def activation_maximization(
     min_iterations = max(min_iterations, convergence_window, lr_warmup_steps)
     assert convergence_window > 1, "convergence_window must be at least 2"
 
-    if use_gpu is not None:
-        if not torch.cuda.is_available():
-            raise RuntimeError("use_gpu is set to True, but CUDA is not available on this system")
+    if use_gpu is None or use_gpu is True:
+        if torch.cuda.is_available():
+            device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            device = torch.device('mps')
+        elif use_gpu is True:
+            raise RuntimeError("use_gpu is set to True, but neither CUDA nor MPS are available on this system")
     else:
-        use_gpu = torch.cuda.is_available()
+        device = torch.device('cpu')
     
     # Doing this keeps the info files for the output more readable
     if not use_jitter:
@@ -147,9 +149,11 @@ def activation_maximization(
 
         temp_handle = target_layer.register_forward_hook(get_channel_shape)
         dummy_input = torch.randn(1, 3, feature_image_size, feature_image_size)
-        if use_gpu:
+        if device.type == 'cuda':
             dummy_input = dummy_input.cuda()
             model = model.cuda()
+        elif device.type == 'mps':
+            dummy_input.to(device)
         model(dummy_input)  # Pass a dummy input to get the channel size
         temp_handle.remove()
 
@@ -166,10 +170,14 @@ def activation_maximization(
     else:
         feature_image = input_image.clone().detach().requires_grad_(True)
 
-    if use_gpu:
+    if device.type == 'cuda':
         feature_image = feature_image.cuda()
         feature_image = feature_image.detach().requires_grad_(True)
         model = model.cuda()
+    elif device.type == 'mps':
+        feature_image = feature_image.to(device)
+        feature_image = feature_image.detach().requires_grad_(True)
+        model = model.to(device)
 
     feature_image_shape = feature_image.shape
 
@@ -282,7 +290,7 @@ def activation_maximization(
 
     print(flush=True)
     handle.remove()
-    feature_image = deprocess_image(feature_image.cpu() if use_gpu else feature_image)
+    feature_image = deprocess_image(feature_image.cpu() if device != 'cpu' else feature_image)
     max_activation = activation.max().item()
 
     # Crop the feature image to focus on the neuron
@@ -371,7 +379,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
     job_args = []
     for layer_name in layer_names:
         if channels is None:
-            channels = list(range(channels_per_layer[layer_idx]))
+            channels = list(range(channels_per_layer[layer_name]))
         neurons = neurons if neurons else [None]
 
         channels_neurons = list(product(channels, neurons))
