@@ -85,6 +85,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+.jupyter/*
 
 # IPython
 profile_default/
@@ -169,3 +170,5 @@ cython_debug/
 
 # Miscellaneous other files
 .vscode/settings.json
+.DS_Store
+aws_credentials

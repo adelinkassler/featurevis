@@ -319,15 +319,6 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
                        parallel=False, return_output=True, cleanup=False, **kwargs):
     use_all_channels = True if channels is None else False
 
-    # For parallel, a random tag to include in file names
-    if parallel:
-        unique_id = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-
-    # # Define an image loader
-    # if init_image_loader is not None:
-    #     def init_image_loader(layer_name, channel, neuron, aggregation):
-    #         #TODO: currying of generic images loader
-
     if layer_names is None:
         layer_names = [name for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)]
     elif isinstance(layer_names, str):
@@ -341,7 +332,6 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
             for submodule in layer_name.split('.'):
                 target_layer = target_layer._modules.get(submodule)
             
-            # Get the number of output channels for the target layer
             if isinstance(target_layer, nn.Conv2d):
                 num_channels = target_layer.out_channels
             elif isinstance(target_layer, nn.BatchNorm2d):
@@ -349,18 +339,13 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
             elif isinstance(target_layer, nn.Linear):
                 num_channels = target_layer.out_features
             elif isinstance(target_layer, nn.Sequential):
-                # If the target layer is a sequential block (e.g., 'layer2'),
-                # we assume it contains convolutional layers and get the number of output channels
-                # from the last convolutional layer in the block
                 conv_layers = [layer for name, layer in model.named_modules() if isinstance(layer, nn.Conv2d)\
                                and name[:len(layer_name)] == layer_name]
                 if conv_layers:
                     num_channels = conv_layers[-1].out_channels
                 else:
-                    # next
                     raise ValueError(f"No convolutional layers found in the sequential block: {layer_name}")
             else:
-                # next
                 raise ValueError(f"Unsupported layer type: {type(target_layer)}")
             
             channels_per_layer[layer_name] = num_channels
@@ -375,110 +360,51 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
     start_time = time.time()
     processed_batches = 0
 
-    if parallel: # Parallel evaluation for slurm using submitit
-        # Serialize the model
-        model_path = f"{os.getenv('HOME')}/.tmp/model_{unique_id}.pth"
-        torch.save(model, model_path)
-
-        # Create an instance of AutoExecutor
-        # executor_dir = output_path if output_path else 'tmp'
-        executor_dir = 'slurm'
-        executor = submitit.AutoExecutor(folder=executor_dir)
-        executor.update_parameters(timeout_min=15, slurm_partition='single', gpus_per_node=1)
-
-        # Make sure neurons processess appropriately if neurons=None
+    # Create executor
+    executor = submitit.AutoExecutor(folder=output_path)
+    if parallel:
+        executor.update_parameters(timeout_min=10, slurm_partition='single')
+    else:
+        executor.update_parameters(timeout_min=10, local_cpus=1, local_gpus=1 if use_gpu else 0)
+        
+    # Create arguments for each job  
+    job_args = []
+    for layer_name in layer_names:
+        if channels is None:
+            channels = list(range(channels_per_layer[layer_idx]))
         neurons = neurons if neurons else [None]
 
-        # Create arguments for each job
-        job_args = []
-        for layer_name in layer_names:
-            if channels is None:
-                channels = list(range(channels_per_layer[layer_name]))
-            channels_neurons = list(product(channels, neurons))
-            for i in range(0, len(channels_neurons), batch_size):
-                job_channels = [c for c, _ in channels_neurons[i:i+batch_size]]
-                job_neurons = [n for _, n in channels_neurons[i:i+batch_size]]
-                job_args.append((model_path, layer_name, job_channels, job_neurons, aggregation, output_path, 
-                                 init_image_loader, kwargs))
-
-        # Submit the job array using map_array
-        job_array = executor.map_array(activation_maximization_batch, job_args)
+        channels_neurons = list(product(channels, neurons))
+        for i in range(0, len(channels_neurons), batch_size):
+            job_channels = [c for c, _ in channels_neurons[i:i+batch_size]]
+            job_neurons = [n for _, n in channels_neurons[i:i+batch_size]]
+            job_args.append((model, layer_name, job_channels, job_neurons, aggregation, output_path, 
+                             init_image_loader, kwargs))
+    
+    # Submit jobs
+    job_array = executor.map_array(activation_maximization_batch, job_args)
+    if parallel:
         print(f"Job array submitted with ID: {job_array[0].job_id.split('_')[0]}")
+        track_job_array_progress([job_array])
+    else:
+        track_local_job_progress([job_array])
 
-        return job_array
+    # Collect results
+    job_results = [job.result() for job in job_array]
+    for job_result in job_results:
+        feature_images.extend(job_result)
+        save_feature_images(job_result, output_path, kwargs)
 
-        # Retrieve the results
-        feature_images = []
-        for job in job_array:
-            try:
-                job_results = job.result()
-                feature_images.extend(job_results)
-            except Exception as e:
-                print(f"Job {job.job_id} failed with exception: {e}")
-                print(f"Error message: {job.stderr()}")
+        processed_batches += 1
+        elapsed_time = time.time() - start_time
+        estimated_total_time = (elapsed_time / processed_batches) * total_batches
+        remaining_time = estimated_total_time - elapsed_time
+        print(f"Batch: {processed_batches}/{total_batches}, "
+              f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s", 
+              flush=True)
 
-        if cleanup: #TODO: make this section work properly
-            # Clean up temporary files
-            os.remove(model_path)
-            for job in job_array:
-                os.remove(f"{executor_dir}/{job.job_id}_submission.sh")
-                os.remove(f"{executor_dir}/{job.job_id}*.pkl")
-                # os.remove(job.submission().paths.submitted_pickle)
-                # os.remove(job.submission().paths.stdout)
-                # os.remove(job.submission().paths.stderr)
- 
-        if return_output:
-            return feature_images
-        
-    elif not parallel: # Sequential evaluation on one node
-        # Make sure neurons processess appropriately if neurons=None
-        neurons = neurons if neurons else [None]
-        
-        # Double check if runs will be long
-        total_n_calls = len(list(product(layer_names, channels, neurons)))
-        if total_n_calls >= 10:
-            if input(f"Run {total_n_calls} activation maximizations sequentially? [y]/n ") not in ['', 'y']:
-                exit()
-
-        # Loop over all layers, channels, etc.
-        for layer_idx, layer_name in enumerate(layer_names):
-            if use_all_channels:
-                channels = list(range(channels_per_layer[layer_idx]))
-
-            for i in range(0, len(channels), batch_size):
-                batch_channels = channels[i:i+batch_size]
-                batch_feature_images = []
-
-                for channel in batch_channels:
-                    for neuron in neurons:
-                        input_image = None
-                        if init_image_loader is not None:
-                            input_image = init_image_loader(layer_name, channel, neuron, aggregation)
-                            input_image = process_feature_image_for_input(input_image)
-                            # input_image = load_feature_image(images_dir, layer_name, channel, neuron, aggregation)
-                            # input_image = torch.from_numpy(input_image).float()
-                            # input_image = input_image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
-                            # input_image = input_image.unsqueeze(0) # Add batch dimension
-
-                        feature_image, activation, loss_values, convergence_iteration, _, _, neuron, aggregation = activation_maximization(
-                            model, None, layer_name, channel, neuron, aggregation, input_image=input_image, **kwargs
-                        )
-                        batch_feature_images.append((feature_image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation))
-
-                feature_images.extend(batch_feature_images)
-
-                if output_path is not None:
-                    save_feature_images(batch_feature_images, output_path, kwargs)
-
-                processed_batches += 1
-                elapsed_time = time.time() - start_time
-                estimated_total_time = (elapsed_time / processed_batches) * total_batches
-                remaining_time = estimated_total_time - elapsed_time
-
-                print(f"Layer: {layer_name}, Batch: {processed_batches}/{total_batches}, "
-                    f"Elapsed Time: {elapsed_time:.2f}s, Estimated Remaining Time: {remaining_time:.2f}s", flush=True)
-        if return_output:
-            return feature_images
+    if return_output:
+        return feature_images
 
 def track_job_array_progress(job_arrays):
     print("Waiting for all jobs to complete...")
@@ -519,6 +445,21 @@ def track_job_array_progress(job_arrays):
     print("\nAll jobs completed.")
     if jobs_ended != job_stats['COMPLETED']:
         print("Warning: some jobs finished with nonzero exit status", file=sys.stderr)
+
+def track_local_job_progress(jobs: List[submitit.Job], poll_frequency: float = 1.0):
+    num_jobs = len(jobs)
+    completed_jobs = 0
+    start_time = time.time()
+
+    while completed_jobs < num_jobs:
+        completed_jobs = sum(job.done() for job in jobs)
+        elapsed_time = time.time() - start_time
+        progress_bar = f"[{'#' * (completed_jobs * 20 // num_jobs):20}]"
+        print(f"\r{progress_bar} {completed_jobs}/{num_jobs} jobs completed "
+              f"(Elapsed: {elapsed_time:.1f}s)", end="", flush=True)
+        time.sleep(poll_frequency)
+
+    print(f"\nAll {num_jobs} jobs completed.")
 
 def plot_feature_images(feature_images, num_columns=5, output_path=None):
     num_images = len(feature_images)
