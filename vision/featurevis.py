@@ -1,6 +1,4 @@
-import os
-import sys
-import time
+import os, sys, time
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -10,9 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Tuple
 import pdb
-import json
+import json, re, random
 from PIL import Image
-import random
 import submitit
 from itertools import product
 from functools import partial
@@ -586,6 +583,201 @@ def plot_saved_feature_images(images_dir, layer_names, channels, neurons, aggreg
             plot_feature_images(batch_feature_images, num_columns, output_path)
 
     return feature_images
+
+def load_info_data(checkpoint_dirs, layer_name, channel_num, info_key="Activation", aggregation='average'):
+    data = []
+    for checkpoint_dir in checkpoint_dirs:
+        _, info_file = feature_image_paths(checkpoint_dir, layer_name, channel_num, None, aggregation)
+        with open(info_file, 'r') as f:
+            info_data = json.load(f)
+            data.append(info_data[info_key])
+    return data
+
+def load_info_data(checkpoint_dirs, layer_name, channel_num, info_key, aggregation='average'):
+    data = []
+    for checkpoint_dir in checkpoint_dirs:
+        _, info_file = feature_image_paths(checkpoint_dir, layer_name, channel_num, None, aggregation)
+        with open(info_file, 'r') as f:
+            info_data = json.load(f)
+            data.append(info_data[info_key])
+    return data
+
+def plot_info_over_training(checkpoint_dirs_path, layer_name, channel_num, info_key, aggregation='average', output_dir=None):
+    checkpoint_dirs = [d for d in os.listdir(checkpoint_dirs_path)
+                       if os.path.isdir(os.path.join(checkpoint_dirs_path, d))]
+    checkpoint_dirs = sorted(checkpoint_dirs, key=lambda x: int(re.search(r'train_(\d+)', x).group(1)))
+
+    data = load_info_data(checkpoint_dirs, layer_name, channel_num, info_key, aggregation)
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(data)
+    plt.xlabel('Training Iteration')
+    plt.ylabel(info_key)
+    plt.title(f'{info_key} vs Training for Layer {layer_name} Channel {channel_num}')
+    plt.tight_layout()
+
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, f'{info_key.lower()}_layer_{layer_name}_channel_{channel_num}.png'))
+
+    plt.show()
+
+def plot_feature_images_over_training(checkpoint_dirs_path, layer_name, channel_num, aggregation='average', output_dir=None):
+    checkpoint_dirs = [d for d in os.listdir(checkpoint_dirs_path)
+                       if os.path.isdir(os.path.join(checkpoint_dirs_path, d))]
+    checkpoint_dirs = sorted(checkpoint_dirs, key=lambda x: int(re.search(r'train_(\d+)', x).group(1)))
+
+    fig, axes = plt.subplots(2, len(checkpoint_dirs) // 2, figsize=(20, 5))
+    for i, checkpoint_dir in enumerate(checkpoint_dirs):
+        img_file, _ = feature_image_paths(os.path.join(checkpoint_dirs_path, checkpoint_dir),
+                                          layer_name, channel_num, None, aggregation)
+        img = Image.open(img_file)
+        axes.flat[i].imshow(img)
+        axes.flat[i].set_title(checkpoint_dir)
+        axes.flat[i].set_xticks([])
+        axes.flat[i].set_yticks([])
+    plt.tight_layout()
+
+    if output_dir is not None:
+        plt.savefig(os.path.join(output_dir, f'feature_images_layer_{layer_name}_channel_{channel_num}.png'))
+
+    plt.show()
+
+def get_channel_influences(model, target_layer, target_channel, influence_layer):
+    # Get the layers in the model
+    layers = list(model.named_modules())
+
+    # Find the target and influence layer indices
+    target_layer_index = [i for i, (name, module) in enumerate(layers) if name == target_layer]
+    influence_layer_index = [i for i, (name, module) in enumerate(layers) if name == influence_layer]
+
+    if not target_layer_index:
+        raise ValueError(f"Target layer '{target_layer}' not found in the model.")
+    if not influence_layer_index:
+        raise ValueError(f"Influence layer '{influence_layer}' not found in the model.")
+
+    target_layer_index = target_layer_index[0]
+    influence_layer_index = influence_layer_index[0]
+
+    # Ensure the influence layer comes before the target layer
+    if influence_layer_index >= target_layer_index:
+        raise ValueError("The influence layer must come before the target layer in the model.")
+
+    # Get the number of channels in the influence layer
+    influence_channels = layers[influence_layer_index][1].out_channels
+
+    # Initialize influence scores for each channel in the influence layer
+    influence_scores = [0] * influence_channels
+
+    # Iterate through the paths from the influence layer to the target layer
+    path_start = influence_layer_index
+    while path_start < target_layer_index:
+        layer = layers[path_start][1]
+
+        if isinstance(layer, nn.Sequential):
+            # Recursively process the sublayers within the Sequential layer
+            for sublayer in layer:
+                if isinstance(sublayer, nn.Conv2d):
+                    # Get the weights connecting the current sublayer to the next layer
+                    weights = sublayer.weight
+
+                    # Calculate the influence of each channel in the current sublayer on the target channel
+                    for channel in range(weights.shape[1]):
+                        influence_scores[channel] += weights[target_channel, channel].sum().item()
+
+                elif isinstance(sublayer, (nn.ReLU, nn.BatchNorm2d, nn.MaxPool2d, nn.AdaptiveAvgPool2d)):
+                    # These sublayers don't affect the influence scores
+                    pass
+
+                else:
+                    # Handle custom module types recursively
+                    for module in sublayer.modules():
+                        if isinstance(module, nn.Conv2d):
+                            # Get the weights connecting the current module to the next layer
+                            weights = module.weight
+
+                            # Calculate the influence of each channel in the current module on the target channel
+                            for channel in range(weights.shape[1]):
+                                influence_scores[channel] += weights[target_channel, channel].sum().item()
+
+            # Update the path_start index to skip the processed sublayers
+            path_start += len(layer)
+
+        elif isinstance(layer, nn.Conv2d):
+            # Get the weights connecting the current layer to the next layer
+            weights = layer.weight
+
+            # Calculate the influence of each channel in the current layer on the target channel
+            for channel in range(weights.shape[1]):
+                influence_scores[channel] += weights[target_channel, channel].sum().item()
+
+            path_start += 1
+
+        elif isinstance(layer, (nn.ReLU, nn.BatchNorm2d, nn.MaxPool2d, nn.AdaptiveAvgPool2d)):
+            # These layers don't affect the influence scores
+            path_start += 1
+
+        else:
+            raise ValueError(f"Unsupported layer type: {type(layer).__name__}")
+
+    # Combine the results into a list of tuples (channel, influence_score)
+    channel_influences = list(enumerate(influence_scores))
+
+    # Sort the channels by their influence scores in descending order
+    channel_influences.sort(key=lambda x: x[1], reverse=True)
+
+    return channel_influences
+
+def find_strongest_influences(model, layer_a, layer_b, channel_num):
+    module_b = eval(f"model.{layer_b}", model.__dict__)
+    module_a = eval(f"model.{layer_a}", model.__dict__)
+    
+    num_channels_a = module_a.out_channels
+    
+    total_effects = torch.zeros(num_channels_a)
+    path_counts = torch.zeros(num_channels_a)
+    
+    current_layer = None
+    
+    for name, module in model.named_modules():
+        if name == layer_a:
+            current_layer = module
+            path_weights = torch.eye(num_channels_a)
+        elif current_layer is not None:
+            if isinstance(module, torch.nn.Conv2d):
+                norm = torch.linalg.norm(module.weight)
+                w = module.weight / norm
+                path_weights = torch.matmul(w.view(module.out_channels, -1), path_weights)
+            elif isinstance(module, torch.nn.Linear):
+                norm = torch.linalg.norm(module.weight)
+                w = module.weight / norm
+                path_weights = torch.matmul(w, path_weights)
+            
+            if name == layer_b:
+                total_effects += path_weights[channel_num]
+                path_counts += (path_weights[channel_num] != 0).float()
+                current_layer = None
+    
+    total_effects /= path_counts
+    
+    channel_indices = torch.arange(num_channels_a)
+    strongest_channels = torch.stack((channel_indices, total_effects), dim=1)
+    
+    strongest_channels = strongest_channels[strongest_channels[:, 1].argsort(descending=True)]
+    
+    # Convert tensor to list of tuples
+    strongest_channels = strongest_channels.cpu().numpy()
+    strongest_channels = [(int(idx), float(effect)) for idx, effect in strongest_channels]
+    
+    return strongest_channels
+
+if __name__ == '__main__':
+    checkpoint_dirs_path = 'feature_images/my_model'
+    layer_name = 'layer2.0.conv0'
+    channel_num = 42
+
+    plot_info_over_training(checkpoint_dirs_path, layer_name, channel_num, 'Activation')
+    plot_feature_images_over_training(checkpoint_dirs_path, layer_name, channel_num)
 
 # For debugging
 if __name__ == "__main__":
