@@ -13,22 +13,36 @@ def parse_comma_separated_int_tuples(string):
 def parse_comma_separated_strs(string):
     return [x.strip() for x in string.split(',')]
 
+def is_slurm_available():
+    try:
+        result = os.subprocess.run(['sinfo', '--version'], stdout=os.subprocess.PIPE, stderr=os.subprocess.PIPE)
+        if result.returncode == 0:
+            print("Slurm is available on this machine.")
+            return True
+        else:
+            print("Slurm is not available on this machine.")
+            return False
+    except FileNotFoundError:
+        print("Slurm is not available on this machine.")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
     parser.add_argument('--model', type=str, help='Model name (must match class name in torchvision)')
     parser.add_argument('--checkpoint-path', type=str, nargs='+', help='Path to saved pytorch model')
     parser.add_argument('--layer-names', '--layers', type=str, nargs='+', help='Whitespace-separated list of layer names (defaults to all convolational layers)')
     parser.add_argument('--channels', type=int, nargs='+', help='Whitespace-separated list of channels to visualize (defaults to all channels)')
-    # parser.add_argument('--layer-names', type=parse_comma_separated_strs, help='Comma/whitespace-separated list of layer names (defaults to all convolational layers)')
-    # parser.add_argument('--channels', type=parse_comma_separated_ints, help='Comma/whitespace-separated list of channels to visualize (defaults to all channels)')
     parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
     parser.add_argument('--aggregation', type=str, default='average', help='Aggregation method')
+    parser.add_argument('--number-of-images', type=int, help="Number of feature images to produce (penalized by diversity weight)")
     parser.add_argument('--crop-factor', type=int, default=2, help='Crop factor')
     parser.add_argument('--init-images-dir', type=str, nargs='+', help='Path to directory of feature images to load as starting point (or a list of such paths, for fallback dirs)')
     parser.add_argument('--output-path', type=str, help='Output path')
     parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
     parser.add_argument('--use-gpu', action='store_true', help='Use GPU')
     parser.add_argument('--parallel', action='store_true', help='Run in parallel using SLURM')
+    parser.add_argument('--local', action='store_true', help="Force local running even if SLURM is available")
     parser.add_argument('--seed', type=int, help='Set seed for activation maximization function')
 
     # Optimizer and convergence parameters
@@ -54,6 +68,7 @@ def main():
     parser.add_argument('--tv-weight', type=float, default=1e-6, help='Total variation regularization weight')
     parser.add_argument('--use-decorrelation', action='store_true', help='Use decorrelation regularization (NOT SUPPORTED)')
     parser.add_argument('--decorrelation-weight', type=float, default=0.1, help='Decorrelation regularization weight')
+    parser.add_argument('--diversity-weight', type=float, default=1.0, help="Weight to use for cosine similarity penalty between feature images")
 
     # Image parameters # TODO: double check
     parser.add_argument('--input-image', type=str, default=None, help='NOT SUPPORTED')
@@ -72,6 +87,17 @@ def main():
     # Create a loader function for initial images
     init_image_loader = make_feature_image_loader_with_fallback(args.init_images_dir) if \
         args.init_images_dir is not None else None
+
+    if args.parallel and args.local:
+        raise ValueError("Cannot set both --parallel and --local flags")
+    elif args.parallel:
+        parallel = True
+    elif args.local:
+        parallel = False
+    else:
+        parallel = is_slurm_available()
+        print("Determining parallelization automatically since neither --parallel nor --local were set. " + 
+              f"Result: {'parallel' if parallel else 'local'} based on automatically detected slurm availability")
 
     act_max_params = {
         'max_iterations': args.max_iterations,
@@ -112,7 +138,7 @@ def main():
                 job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
                                             aggregation=args.aggregation, crop_factor=args.crop_factor,
                                             init_image_loader=init_image_loader, output_path=output_path,
-                                            batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
+                                            batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=parallel, return_output=False,
                                             **act_max_params)
                 job_arrays.append(job_array)
             except:
@@ -122,7 +148,7 @@ def main():
         job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
                                         aggregation=args.aggregation, crop_factor=args.crop_factor,
                                         init_image_loader=init_image_loader, output_path=args.output_path,
-                                        batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=args.parallel, return_output=False,
+                                        batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=parallel, return_output=False,
                                         **act_max_params)
         job_arrays.append(job_array)
     
