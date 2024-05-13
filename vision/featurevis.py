@@ -68,7 +68,7 @@ def activation_maximization(
     neuron=None, # Passed from visualize_features. If None, picks a neuron in the center
     aggregation='average',
     number_of_images=1, # Number of images to generate
-    diversity_weight=1.0, # Pnealty on cosine similarity
+    diversity_weight=1.0, # Penalty on cosine similarity
     # Optimizer and convergence parameters
     max_iterations=1000,
     min_iterations=2,
@@ -519,13 +519,14 @@ def plot_feature_images(feature_images, num_columns=5, output_path=None):
     else:
         plt.show()
 
-def feature_image_paths(directory, layer_name, channel, neuron, aggregation, image_num):
+def feature_image_paths(directory, layer_name, channel, neuron=None, aggregation="average", image_num=None):
+    image_num_suffix = "" if image_num is None else '-' + str(image_num)
     if neuron is not None:
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_neuron_{neuron[0]}_{neuron[1]}-{image_num}.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_neuron_{neuron[0]}_{neuron[1]}{image_num_suffix}.jpg"
     elif aggregation == 'single':
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_center-{image_num}.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_center{image_num_suffix}.jpg"
     else:
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_{aggregation}-{image_num}.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_{aggregation}{image_num_suffix}.jpg"
 
     info_filename = filename[:-4] + ".info.json"
 
@@ -557,12 +558,13 @@ def save_feature_images(feature_images, output_path, params):
             with open(info_filename, 'w') as file:
                 json.dump(info_data, file, indent=2)
 
-def load_feature_image(image_dir, layer_name, channel, neuron, aggregation):
+def load_feature_image(image_dir, layer_name, channel, neuron=None, aggregation='average'):
     filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation)
     image = plt.imread(filename)
     return image
 
-def process_feature_image_for_input(image):
+def preprocess_stored_feature_image(image):
+    assert isinstance(image, np.ndarray), "Input image is not a numpy array"
     # Preprocess feature image for use as an input image to activation_maximization
     image = torch.from_numpy(image).float()
     image = image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
@@ -579,7 +581,7 @@ def make_feature_image_loader_with_fallback(image_dirs):
             try:
                 i += 1
                 image = load_feature_image(path, layer_name, channel, neuron, aggregation)
-                image = process_feature_image_for_input(image)
+                image = preprocess_stored_feature_image(image)
                 break
             except:
                 next
