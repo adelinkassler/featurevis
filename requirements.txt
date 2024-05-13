@@ -1,47 +1,5 @@
-boto3 @ file:///home/conda/feedstock_root/build_artifacts/boto3_1713924693901/work
-botocore @ file:///home/conda/feedstock_root/build_artifacts/botocore_1713915146627/work
-Brotli @ file:///home/conda/feedstock_root/build_artifacts/brotli-split_1695989787169/work
-certifi @ file:///home/conda/feedstock_root/build_artifacts/certifi_1707022139797/work/certifi
-charset-normalizer @ file:///home/conda/feedstock_root/build_artifacts/charset-normalizer_1698833585322/work
-cloudpickle @ file:///home/conda/feedstock_root/build_artifacts/cloudpickle_1697464713350/work
-contourpy @ file:///home/conda/feedstock_root/build_artifacts/contourpy_1712418557724/work
-cycler @ file:///home/conda/feedstock_root/build_artifacts/cycler_1696677705766/work
-filelock @ file:///home/conda/feedstock_root/build_artifacts/filelock_1711394622191/work
-fonttools @ file:///home/conda/feedstock_root/build_artifacts/fonttools_1712344564583/work
-fsspec @ file:///home/conda/feedstock_root/build_artifacts/fsspec_1710808267764/work
-gmpy2 @ file:///home/conda/feedstock_root/build_artifacts/gmpy2_1666808665953/work
-idna @ file:///home/conda/feedstock_root/build_artifacts/idna_1701026962277/work
-Jinja2 @ file:///home/conda/feedstock_root/build_artifacts/jinja2_1704966972576/work
-jmespath @ file:///home/conda/feedstock_root/build_artifacts/jmespath_1655568249366/work
-joblib @ file:///home/conda/feedstock_root/build_artifacts/joblib_1712597192451/work
-kiwisolver @ file:///home/conda/feedstock_root/build_artifacts/kiwisolver_1695379920604/work
-MarkupSafe @ file:///home/conda/feedstock_root/build_artifacts/markupsafe_1706899926732/work
-matplotlib @ file:///home/conda/feedstock_root/build_artifacts/matplotlib-suite_1708026439111/work
-mpmath @ file:///home/conda/feedstock_root/build_artifacts/mpmath_1678228039184/work
-munkres==1.1.4
-networkx @ file:///home/conda/feedstock_root/build_artifacts/networkx_1698504735452/work
-numpy @ file:///home/conda/feedstock_root/build_artifacts/numpy_1707225376651/work/dist/numpy-1.26.4-cp311-cp311-linux_x86_64.whl#sha256=d08e1c9e5833ae7780563812aa73e2497db1ee3bd5510d3becb8aa18aa2d0c7c
-packaging @ file:///home/conda/feedstock_root/build_artifacts/packaging_1710075952259/work
-pillow @ file:///home/conda/feedstock_root/build_artifacts/pillow_1712154447422/work
-ply @ file:///home/conda/feedstock_root/build_artifacts/ply_1712242996588/work
-pyparsing @ file:///home/conda/feedstock_root/build_artifacts/pyparsing_1709721012883/work
-PyQt5==5.15.9
-PyQt5-sip==12.12.2
-PySocks @ file:///home/conda/feedstock_root/build_artifacts/pysocks_1661604839144/work
-python-dateutil @ file:///home/conda/feedstock_root/build_artifacts/python-dateutil_1709299778482/work
-requests @ file:///home/conda/feedstock_root/build_artifacts/requests_1684774241324/work
-s3transfer @ file:///home/conda/feedstock_root/build_artifacts/s3transfer_1710497251148/work
-scikit-learn @ file:///home/conda/feedstock_root/build_artifacts/scikit-learn_1712824570690/work
-scipy @ file:///home/conda/feedstock_root/build_artifacts/scipy-split_1712255248371/work/dist/scipy-1.13.0-cp311-cp311-linux_x86_64.whl#sha256=1f52d768ff23a2df0b51ba36341f4bd7f831e98f0c5c8636112da257dd5998e9
-sip @ file:///home/conda/feedstock_root/build_artifacts/sip_1697300428897/work
-six @ file:///home/conda/feedstock_root/build_artifacts/six_1620240208055/work
-submitit @ file:///home/conda/feedstock_root/build_artifacts/submitit_1700812531904/work
-sympy @ file:///home/conda/feedstock_root/build_artifacts/sympy_1684180540116/work
-threadpoolctl @ file:///home/conda/feedstock_root/build_artifacts/threadpoolctl_1710943558485/work
-toml @ file:///home/conda/feedstock_root/build_artifacts/toml_1604308577558/work
-tomli @ file:///home/conda/feedstock_root/build_artifacts/tomli_1644342247877/work
-torch @ file:///home/conda/feedstock_root/build_artifacts/libtorch_1706665913501/work
-torchvision @ file:///home/conda/feedstock_root/build_artifacts/torchvision_1708903187157/work
-tornado @ file:///home/conda/feedstock_root/build_artifacts/tornado_1708363099148/work
-typing_extensions @ file:///home/conda/feedstock_root/build_artifacts/typing_extensions_1712329955671/work
-urllib3 @ file:///home/conda/feedstock_root/build_artifacts/urllib3_1708239446578/work
+matplotlib==3.8.3
+numpy==1.26.4
+pillow==10.3.0
+submitit==1.5.1
+torchvision==0.16.1

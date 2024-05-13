@@ -1,6 +1,5 @@
 from setuptools import find_packages, setup
 
-
 # Function to read the contents of the requirements.txt file
 def read_requirements():
     with open('requirements.txt', 'r') as req:
