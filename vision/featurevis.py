@@ -67,6 +67,8 @@ def activation_maximization(
     channel=None, # Passed from visualize_features. If None, uses all channels
     neuron=None, # Passed from visualize_features. If None, picks a neuron in the center
     aggregation='average',
+    number_of_images=1, # Number of images to generate
+    diversity_weight=1.0, # Pnealty on cosine similarity
     # Optimizer and convergence parameters
     max_iterations=1000,
     min_iterations=2,
@@ -109,6 +111,7 @@ def activation_maximization(
     min_iterations = max(min_iterations, convergence_window, lr_warmup_steps)
     assert convergence_window > 1, "convergence_window must be at least 2"
 
+    # Find device type, create device object for later use
     if use_gpu is None or use_gpu is True:
         if torch.cuda.is_available():
             device = torch.device('cuda')
@@ -118,6 +121,13 @@ def activation_maximization(
             raise RuntimeError("use_gpu is set to True, but neither CUDA nor MPS are available on this system")
     else:
         device = torch.device('cpu')
+
+    # Send model to correct device
+    if device.type == 'cuda':
+        model = model.cuda()
+    elif device.type == 'mps':
+        model = model.to(device)
+
     
     # Doing this keeps the info files for the output more readable
     if not use_jitter:
@@ -131,6 +141,7 @@ def activation_maximization(
     if not use_decorrelation:
         decorrelation_weight = None
 
+    # Find target layer
     model.eval()
     target_layer = model
     for submodule in layer_name.split('.'):
@@ -148,7 +159,6 @@ def activation_maximization(
         dummy_input = torch.randn(1, 3, feature_image_size, feature_image_size)
         if device.type == 'cuda':
             dummy_input = dummy_input.cuda()
-            model = model.cuda()
         elif device.type == 'mps':
             dummy_input.to(device)
         model(dummy_input)  # Pass a dummy input to get the channel size
@@ -161,24 +171,9 @@ def activation_maximization(
             center_height, center_width = height // 2, width // 2
             neuron = (center_height, center_width)
 
-    # Create/set up initial image
-    if input_image is None:
-        feature_image = torch.randn(1, 3, feature_image_size, feature_image_size, requires_grad=True)
-    else:
-        feature_image = input_image.clone().detach().requires_grad_(True)
-
-    if device.type == 'cuda':
-        feature_image = feature_image.cuda()
-        feature_image = feature_image.detach().requires_grad_(True)
-        model = model.cuda()
-    elif device.type == 'mps':
-        feature_image = feature_image.to(device)
-        feature_image = feature_image.detach().requires_grad_(True)
-        model = model.to(device)
-
     feature_image_shape = feature_image.shape
 
-    # The part where we get the activation of the channel/neuron/etc
+    # Define and register hook function for target neuron/channel activation
     activation = None
 
     def hook(module, input, output):
@@ -192,103 +187,137 @@ def activation_maximization(
 
     handle = target_layer.register_forward_hook(hook)
 
-    optimizer = torch.optim.Adam([feature_image], lr=learning_rate, weight_decay=reg_lambda)
+    feature_images = []
+    max_activations = []
+    loss_values_list = []
+    convergence_iterations = []
 
-    # Options for schedules for LR changing over time
-    scheduler = None
-    if lr_schedule == 'exponential':
-        if lr_min is not None and lr_decay_rate is None:
-            lr_decay_rate = (lr_min / learning_rate)**(1 / max_iterations)
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay_rate)
-    elif lr_schedule == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_iterations, eta_min=lr_min)
-    if lr_warmup_steps > 0 and scheduler is not None:
-        scheduler = torch.optim.lr_scheduler.ChainedScheduler([
-            torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=lr_min / learning_rate, total_iters=lr_warmup_steps),
-            scheduler
-        ])
+    # Optimization loop
+    for k in range(number_of_images):
+        # Create/set up initial image
+        if input_image is None:
+            feature_image = torch.randn(1, 3, feature_image_size, feature_image_size, requires_grad=True)
+        else:
+            feature_image = input_image.clone().detach().requires_grad_(True)
+        
+        # Configure image on device
+        if device.type == 'cuda':
+            feature_image.cuda()
+        elif device.type == 'mps':
+            feature_image = feature_image.to(device)
+        feature_image = feature_image.detach().requires_grad_(True)
 
-    loss_values = []
-    convergence_iteration = max_iterations
+        # Create the optimizer we will use
+        optimizer = torch.optim.Adam([feature_image], lr=learning_rate, weight_decay=reg_lambda)
 
-    # The actual optimization process
-    for i in range(max_iterations):
-        # Image modifications (option) and forward pass
-        if use_jitter:
-            jitter = torch.randn_like(feature_image) * jitter_scale
-            feature_image.data += jitter
+        # Options for schedules for LR changing over time
+        scheduler = None
+        if lr_schedule == 'exponential':
+            if lr_min is not None and lr_decay_rate is None:
+                lr_decay_rate = (lr_min / learning_rate)**(1 / max_iterations)
+            scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay_rate)
+        elif lr_schedule == 'cosine':
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_iterations, eta_min=lr_min)
+        if lr_warmup_steps > 0 and scheduler is not None:
+            scheduler = torch.optim.lr_scheduler.ChainedScheduler([
+                torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=lr_min / learning_rate, total_iters=lr_warmup_steps),
+                scheduler
+            ])
 
-        if use_scaling:
-            scale_factor = 1 + (torch.rand(1) - 0.5) * scale_range
-            scaled_size = tuple(int(s * scale_factor.item()) for s in feature_image_shape[-2:])
-            feature_image = nn.functional.interpolate(feature_image, size=scaled_size, mode='bilinear', align_corners=False)
+        loss_values = []
+        convergence_iteration = max_iterations
 
-        model(feature_image)
+        # Inner optimzation loop (per feature image)
+        for i in range(max_iterations):
+            # Image modifications (option) and forward pass
+            if use_jitter:
+                jitter = torch.randn_like(feature_image) * jitter_scale
+                feature_image.data += jitter
 
-        # Calculate loss, including frequency regularization steps
-        # pdb.set_trace()
-        loss = -torch.mean(activation)
+            if use_scaling:
+                scale_factor = 1 + (torch.rand(1) - 0.5) * scale_range
+                scaled_size = tuple(int(s * scale_factor.item()) for s in feature_image_shape[-2:])
+                feature_image = nn.functional.interpolate(feature_image, size=scaled_size, mode='bilinear', align_corners=False)
 
-        # (L2 regularization already baked into the optimizer: reg_lambda)
-        if use_gauss:
-            loss += GaussianBlur(kernel_size=gauss_kernel_size)(feature_image).mean()
+            model(feature_image)
 
-        if use_tv_reg:
-            def tv_loss(img):
-                """Total variation regularization"""
-                diff1 = img[:,:,1:,:] - img[:,:,:-1,:]
-                diff2 = img[:,:,:,1:] - img[:,:,:,:-1]
-                diff3 = img[:,:,2:,1:] - img[:,:,:-2,:-1]
-                diff4 = img[:,:,1:,2:] - img[:,:,:-1,:-2]
+            # Calculate loss, including frequency regularization steps
+            # pdb.set_trace()
+            loss = -torch.mean(activation)
 
-                loss = torch.sum(torch.abs(diff1)) + torch.sum(torch.abs(diff2)) + \
-                    torch.sum(torch.abs(diff3)) + torch.sum(torch.abs(diff4))
+            # (L2 regularization already baked into the optimizer: reg_lambda)
+            if use_gauss:
+                loss += GaussianBlur(kernel_size=gauss_kernel_size)(feature_image).mean()
 
-                return loss
+            if use_tv_reg:
+                def tv_loss(img):
+                    """Total variation regularization"""
+                    diff1 = img[:,:,1:,:] - img[:,:,:-1,:]
+                    diff2 = img[:,:,:,1:] - img[:,:,:,:-1]
+                    diff3 = img[:,:,2:,1:] - img[:,:,:-2,:-1]
+                    diff4 = img[:,:,1:,2:] - img[:,:,:-1,:-2]
 
-            loss += tv_weight * tv_loss(feature_image)
+                    loss = torch.sum(torch.abs(diff1)) + torch.sum(torch.abs(diff2)) + \
+                        torch.sum(torch.abs(diff3)) + torch.sum(torch.abs(diff4))
 
-        if use_decorrelation:
-            # I don't think I'm implimenting this correctly yet
-            def feature_decorrelation_loss(features):
-                """Compute feature decorrelation loss."""
-                mean_features = features.mean(dim=[2, 3], keepdim=True)
-                centered_features = features - mean_features
-                feature_covariance = torch.matmul(centered_features.transpose(1, 0), centered_features) / (features.size(2) * features.size(3))
-                feature_correlation = feature_covariance / torch.sqrt(torch.diag(feature_covariance)[:, None] * torch.diag(feature_covariance)[None, :])
-                decorrelation_loss = (feature_correlation - torch.eye(features.size(1), device=features.device)).norm(p=2)
-                return decorrelation_loss
+                    return loss
 
-            features = target_layer.output.clone().detach()
-            decorrelation_loss = feature_decorrelation_loss(features)
-            loss += decorrelation_weight * decorrelation_loss
+                loss += tv_weight * tv_loss(feature_image)
 
-        # TODO: check if there are efficiency differences between adding to the loss
-        # in various places, vs. doing it all at once at the end
+            if use_decorrelation:
+                # I don't think I'm implimenting this correctly yet
+                def feature_decorrelation_loss(features):
+                    """Compute feature decorrelation loss."""
+                    mean_features = features.mean(dim=[2, 3], keepdim=True)
+                    centered_features = features - mean_features
+                    feature_covariance = torch.matmul(centered_features.transpose(1, 0), centered_features) / (features.size(2) * features.size(3))
+                    feature_correlation = feature_covariance / torch.sqrt(torch.diag(feature_covariance)[:, None] * torch.diag(feature_covariance)[None, :])
+                    decorrelation_loss = (feature_correlation - torch.eye(features.size(1), device=features.device)).norm(p=2)
+                    return decorrelation_loss
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+                features = target_layer.output.clone().detach()
+                decorrelation_loss = feature_decorrelation_loss(features)
+                loss += decorrelation_weight * decorrelation_loss
 
-        loss_values.append(loss.item())
+            # Diversity penalty
+            if k > 0 and diversity_weight > 0:
+                cosine_similarities = []
+                for prev_feature_image in feature_images:
+                    cosine_similarity = torch.nn.functional.cosine_similarity(
+                        feature_image.flatten(), prev_feature_image.flatten(), dim=0
+                    )
+                    cosine_similarities.append(cosine_similarity)
+                diversity_penalty = torch.mean(torch.stack(cosine_similarities))
+                loss += diversity_weight * diversity_penalty
 
-        if progress_bar:
-            print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="", flush=True)
+            # TODO: check if there are efficiency differences between adding to the loss
+            # in various places, vs. doing it all at once at the end
 
-        # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
-        # if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
-        # Converges if the change in loss is less than convergence_threshold for the last convergence_window steps
-        if i >= (min_iterations-1) and max(loss_values[-convergence_window:]) - min(loss_values[-convergence_window:]) < convergence_threshold:
-            convergence_iteration = i + 1
-            break
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        if scheduler is not None:
-            scheduler.step()
+            loss_values.append(loss.item())
 
-    print(flush=True)
-    handle.remove()
-    feature_image = deprocess_image(feature_image.cpu() if device != 'cpu' else feature_image)
-    max_activation = activation.max().item()
+            if progress_bar:
+                print(f"\rIteration {i+1}/{max_iterations}, Loss: {loss.item():.4f}, {layer_name}-{channel}-{neuron}", end="", flush=True)
+
+            # if i >= (min_iterations-1) and abs(loss_values[-1] - loss_values[-2]) < convergence_threshold:
+            # if i > min_iterations and max([abs(loss_values[-k] - loss_values[-k-1]) for k in range(1,convergence_window+1)]) < convergence_threshold:
+            # Converges if the change in loss is less than convergence_threshold for the last convergence_window steps
+            if i >= (min_iterations-1) and max(loss_values[-convergence_window:]) - min(loss_values[-convergence_window:]) < convergence_threshold:
+                convergence_iteration = i + 1
+                break
+
+            if scheduler is not None:
+                scheduler.step()
+
+        print(flush=True)
+        handle.remove()
+        feature_images.append(deprocess_image(feature_image.cpu() if device != 'cpu' else feature_image))
+        max_activations.append(activation.max().item())
+        loss_values_list.append(loss_values)
+        convergence_iterations.append(convergence_iteration)
 
     # Crop the feature image to focus on the neuron
     if aggregation == 'single':
@@ -300,7 +329,7 @@ def activation_maximization(
         crop_right = min(feature_image_size, crop_left + crop_size)
         feature_image = feature_image[crop_top:crop_bottom, crop_left:crop_right]
 
-    return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
+    return feature_images, max_activations, loss_values_list, convergence_iterations, layer_name, channel, neuron, aggregation
 
 def activation_maximization_batch(job_args):
     model_path, layer_name, channels, neurons, aggregation, output_path, image_loader, kwargs = job_args
@@ -312,8 +341,8 @@ def activation_maximization_batch(job_args):
         input_image = image_loader(layer_name, channel, neuron, aggregation) if image_loader is not None else None
         print(f"\nProcessing channel {channel} and neuron {neuron} for layer {layer_name}")
         result = activation_maximization(model=model, layer_name=layer_name, channel=channel, 
-                                         neuron=neuron, aggregation=aggregation, input_image=input_image,
-                                         **kwargs)
+                                         neuron=neuron, aggregation=aggregation, 
+                                         input_image=input_image, **kwargs)
         job_results.append(result)
         save_feature_images([result], output_path, kwargs)
         print(f"Saved feature image for channel {channel} and neuron {neuron}")
@@ -490,13 +519,13 @@ def plot_feature_images(feature_images, num_columns=5, output_path=None):
     else:
         plt.show()
 
-def feature_image_paths(directory, layer_name, channel, neuron, aggregation):
+def feature_image_paths(directory, layer_name, channel, neuron, aggregation, image_num):
     if neuron is not None:
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_neuron_{neuron[0]}_{neuron[1]}.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_neuron_{neuron[0]}_{neuron[1]}-{image_num}.jpg"
     elif aggregation == 'single':
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_center.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_center-{image_num}.jpg"
     else:
-        filename = f"{directory}/layer_{layer_name}_channel_{channel}_{aggregation}.jpg"
+        filename = f"{directory}/layer_{layer_name}_channel_{channel}_{aggregation}-{image_num}.jpg"
 
     info_filename = filename[:-4] + ".info.json"
 
@@ -510,21 +539,23 @@ def save_feature_images(feature_images, output_path, params):
     os.makedirs(directory, exist_ok=True)
     print(f"save_feature_images called with output_path={output_path}")
 
-    for image, activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation in feature_images:
-        filename, info_filename = feature_image_paths(directory, layer_name, channel, neuron, aggregation)
-        plt.imsave(filename, image)
-        info_data = {
-            "Layer": layer_name,
-            "Channel": channel,
-            "Neuron": neuron,
-            "Aggregation": aggregation,
-            "Activation": activation,
-            "Convergence Iteration": convergence_iteration,
-            "Parameters": params,
-            "Loss Values": loss_values
-        }
-        with open(info_filename, 'w') as file:
-            json.dump(info_data, file)
+    for images, activations, loss_values_list, convergence_iterations, layer_name, channel, neuron, aggregation in feature_images:
+        for j, (image, activation, loss_values, convergence_iteration) in enumerate(zip(images, activations, loss_values_list, convergence_iterations)):
+            filename, info_filename = feature_image_paths(directory, layer_name, channel, neuron, aggregation)
+            plt.imsave(filename, image)
+            info_data = {
+                "Layer": layer_name,
+                "Channel": channel,
+                "Neuron": neuron,
+                "Aggregation": aggregation,
+                "Image Number": j,
+                "Activation": activation,
+                "Convergence Iteration": convergence_iteration,
+                "Parameters": params,
+                "Loss Values": loss_values
+            }
+            with open(info_filename, 'w') as file:
+                json.dump(info_data, file, indent=2)
 
 def load_feature_image(image_dir, layer_name, channel, neuron, aggregation):
     filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation)
