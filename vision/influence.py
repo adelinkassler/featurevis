@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from vision.featurevis import load_feature_image, process_feature_image_for_input
+from .featurevis import load_feature_image, preprocess_stored_feature_image
 
 def find_influential_neurons(model, layer1_name, layer2_name, target_channel, image_dir, aggregation='average', k=5):
     # Get the specified layers
@@ -9,7 +9,7 @@ def find_influential_neurons(model, layer1_name, layer2_name, target_channel, im
 
     # Load the feature visualization image for the target channel in layer2
     feature_image = load_feature_image(image_dir, layer2_name, target_channel, None, aggregation)
-    feature_image = process_feature_image_for_input(feature_image)
+    feature_image = preprocess_stored_feature_image(feature_image)
 
     # Register hooks to store activations
     activations = {}
@@ -42,7 +42,6 @@ def find_influential_neurons(model, layer1_name, layer2_name, target_channel, im
     top_indices = torch.argsort(influence_scores, descending=True)[:k]
 
     return top_indices.tolist(), influence_scores[top_indices].tolist()
-
 
 def get_layer_by_name(model, layer_name):
     for name, module in model.named_modules():

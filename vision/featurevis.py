@@ -558,8 +558,8 @@ def save_feature_images(feature_images, output_path, params):
             with open(info_filename, 'w') as file:
                 json.dump(info_data, file, indent=2)
 
-def load_feature_image(image_dir, layer_name, channel, neuron=None, aggregation='average'):
-    filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation)
+def load_feature_image(image_dir, layer_name, channel, neuron=None, aggregation='average', image_num=None):
+    filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation, image_num)
     image = plt.imread(filename)
     return image
 
@@ -569,6 +569,12 @@ def preprocess_stored_feature_image(image):
     image = torch.from_numpy(image).float()
     image = image.permute(2, 0, 1)  # Rearrange dimensions to [channels, height, width]
     image = image.unsqueeze(0) # Add batch dimension
+    return image
+
+def load_feature_tensor(image_dir, layer_name, channel, neuron=None, aggregation='average', image_num=None, device='cpu'):
+    image = load_feature_image(image_dir, layer_name, channel, neuron, aggregation, image_num)
+    image = preprocess_stored_feature_image(image)
+    image.to(device)
     return image
 
 def make_feature_image_loader_with_fallback(image_dirs):
