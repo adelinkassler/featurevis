@@ -8,7 +8,7 @@ def find_influential_neurons(model, layer1_name, layer2_name, target_channel, im
     layer2 = get_layer_by_name(model, layer2_name)
 
     # Load the feature visualization image for the target channel in layer2
-    feature_image = load_feature_image(image_dir, layer2_name, target_channel, None, aggregation)
+    feature_image = load_feature_image(image_dir, layer2_name, target_channel, None, aggregation, None)
     feature_image = preprocess_stored_feature_image(feature_image)
 
     # Register hooks to store activations
@@ -58,3 +58,6 @@ def calculate_influence_scores(layer_activations, target_activation):
     influence_scores = (normalized_activations * target_activation).sum(dim=(2, 3)).squeeze()
 
     return influence_scores
+
+if __name__ == '__main__':
+    find_influential_neurons()
