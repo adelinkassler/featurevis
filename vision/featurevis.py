@@ -119,14 +119,19 @@ def activation_maximization(
             device = torch.device('mps')
         elif use_gpu is True:
             raise RuntimeError("use_gpu is set to True, but neither CUDA nor MPS are available on this system")
+        else:
+            device = torch.device('cpu')
     else:
         device = torch.device('cpu')
 
-    # Send model to correct device
-    if device.type == 'cuda':
-        model = model.cuda()
-    elif device.type == 'mps':
+    if device.type != 'cpu':
         model = model.to(device)
+
+    # # Send model to correct device
+    # if device.type == 'cuda':
+    #     model = model.cuda()
+    # elif device.type == 'mps':
+    #     model = model.to(device)
 
     
     # Doing this keeps the info files for the output more readable
@@ -332,10 +337,9 @@ def activation_maximization(
     return feature_images, max_activations, loss_values_list, convergence_iterations, layer_name, channel, neuron, aggregation
 
 def activation_maximization_batch(job_args):
-    model_path, layer_name, channels, neurons, aggregation, output_path, image_loader, kwargs = job_args
+    model, layer_name, channels, neurons, aggregation, output_path, image_loader, kwargs = job_args
     print(f"\nStarting job for layer: {layer_name}, channels: {channels}, neurons: {neurons}, aggregation: {aggregation}",
           f"Additional arguments: {kwargs}")
-    model = torch.load(model_path)
     job_results = []
     for channel, neuron in zip(channels, neurons):
         input_image = image_loader(layer_name, channel, neuron, aggregation) if image_loader is not None else None
@@ -359,7 +363,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         layer_names = [layer_names]
 
     if use_all_channels:
-        print("Using all convulational channels")
+        print("Using all convolutional channels")
         channels_per_layer = {}
         for layer_name in layer_names:
             target_layer = model

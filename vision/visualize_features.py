@@ -1,8 +1,9 @@
 import sys, os
 # sys.path.append(f"{os.getenv('HOME')}/vision/")
-from .featurevis import *
+from vision.featurevis import *
 import argparse
 import pdb
+import subprocess
 
 def parse_comma_separated_ints(string):
     return [int(x.strip()) for x in string.split(',')]
@@ -15,7 +16,7 @@ def parse_comma_separated_strs(string):
 
 def is_slurm_available():
     try:
-        result = os.subprocess.run(['sinfo', '--version'], stdout=os.subprocess.PIPE, stderr=os.subprocess.PIPE)
+        result = subprocess.run(['sinfo', '--version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode == 0:
             print("Slurm is available on this machine.")
             return True
@@ -44,6 +45,7 @@ def main():
     parser.add_argument('--parallel', action='store_true', help='Run in parallel using SLURM')
     parser.add_argument('--local', action='store_true', help="Force local running even if SLURM is available")
     parser.add_argument('--seed', type=int, help='Set seed for activation maximization function')
+    parser.add_argument('--config', '-c', type=str, help="Path to a yaml-formatted config file with parameters. Flags will override.")
 
     # Optimizer and convergence parameters
     parser.add_argument('--max-iterations', type=int, default=1000, help='Maximum number of iterations')
@@ -79,6 +81,10 @@ def main():
     # parser.add_argument('--use-gpu', action='store_true', help='Use GPU')
     parser.add_argument('--progress-bar', action='store_true', help='Show progress bar')
     args = parser.parse_args()
+
+    # if args.config:
+    #     if not os.path.isfile(args.config):
+            
 
     if args.output_path is None:
         if input("--output-path has not been set. Continue without saving results? y/[n] ") != 'y':
