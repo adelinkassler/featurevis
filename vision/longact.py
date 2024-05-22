@@ -1,90 +1,137 @@
-import json
-from functools import partial
+import os
+import torch
+from typing import List, Dict
 import matplotlib.pyplot as plt
 from vision.featurevis import load_torchvision_model
+from vision import utils
 
-def register_activation_hooks(model, loci_dict):
+def get_longitudinal_activations(model_name: str, checkpoint_paths: List[str], layer_name: str, channel_num: int, 
+                             feature_image: torch.Tensor, device: str = 'cpu') -> Dict[str, float]:
     activations = {}
     
-    def hook_factory(layer_name, index):
-        def hook(module, input, output):
-            if output.ndim == 2 and output.shape[1] > 1:
-                activations[(layer_name, index)] = output[0, index].item()
-            else:
-                activations[(layer_name, index)] = output.item()
-        return hook
-    
-    for layer_name, neuron_channel_indices in loci_dict.items():
-        layer = model
+    for checkpoint_path in checkpoint_paths:
+        checkpoint_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+        model = load_torchvision_model(model_name=model_name, checkpoint_path=checkpoint_path, device=device)
+        model.eval()
+        
+        # Find the target layer
+        target_layer = model
         for submodule in layer_name.split('.'):
-            layer = layer._modules.get(submodule)
-        for index in neuron_channel_indices:
-            layer.register_forward_hook(hook_factory(layer_name, index))
+            target_layer = target_layer._modules.get(submodule)
+        
+        activation = None
+        
+        def hook(module, input, output):
+            nonlocal activation
+            activation = output[:, channel_num].mean().item()
+        
+        handle = target_layer.register_forward_hook(hook)
+        
+        feature_image = feature_image.to(device)
+        with torch.no_grad():
+            model(feature_image)
+        
+        handle.remove()
+        
+        activations[checkpoint_name] = activation
     
     return activations
 
-def get_longitudinal_activation(feature_image, model_name, checkpoint_paths, loci_dict, output_path=None):
-    longitudinal_data = []
+def plot_longitudinal_activations(activations: Dict[str, float], layer_name: str, channel_num: int, 
+                                  output_path: str = None) -> None:
+    checkpoint_names = list(activations.keys())
+    checkpoint_names.sort()
     
-    for checkpoint_path in checkpoint_paths:
-        model = load_torchvision_model(model_name, checkpoint_path)
-        model.eval()
-        
-        activations = register_activation_hooks(model, loci_dict)
-        
-        model(feature_image)
-        checkpoint_activations = activations.copy()
-        
-        longitudinal_data.append((checkpoint_path, checkpoint_activations))
-    
-    if output_path:
-        with open(output_path, 'w') as f:
-            json.dump(longitudinal_data, f)
-    
-    return longitudinal_data
-
-def plot_longitudinal_activation(longitudinal_data, loci_dict):
-    checkpoints = [data[0] for data in longitudinal_data]
-    activations = [data[1] for data in longitudinal_data]
+    activation_values = [activations[checkpoint] for checkpoint in checkpoint_names]
     
     plt.figure(figsize=(10, 6))
-    for layer_name, neuron_channel_indices in loci_dict.items():
-        for index in neuron_channel_indices:
-            activation_values = [checkpoint_activations[(layer_name, index)] for checkpoint_activations in activations]
-            plt.plot(checkpoints, activation_values, label=f"Layer: {layer_name}, Index: {index}")
+    plt.plot(activation_values, marker='o')
+    plt.xticks(range(len(checkpoint_names)), checkpoint_names, rotation=45, ha='right')
+    plt.xlabel('Checkpoint')
+    plt.ylabel('Activation')
+    plt.title(f'Longitudinal Activations for Layer: {layer_name}, Channel: {channel_num}')
+    plt.grid(True)
+    plt.tight_layout()
     
-    plt.xlabel("Model Checkpoint")
-    plt.ylabel("Activation")
-    plt.title("Longitudinal Activation")
-    plt.legend()
-    plt.show()
+    if output_path:
+        utils.ensure_dir_exists_for_file(output_path)
+        plt.savefig(output_path)
+    else:
+        plt.show()
+
+
+# if __name__ == '__main__':
+#     from vision.featurevis import load_feature_tensor
+#     # import argparse
+
+#     # parser = argparse.ArgumentParser("Get and save longitudinal activation data")
+
+#     image = load_feature_tensor("feature_images/resnet50/pretrained/full", 'layer2.2.conv2', 14)
+
+#     # Generate a random noise image
+#     image_size = (1, 3, 224, 224)
+#     random_noise_image = torch.randn(image_size)
+
+#     checkpoint_paths = [
+#         'models/resnet50_checkpoints/1/checkpoint_2024-03-25-00h28_epoch_0_train_200.pth.tar',
+#         'models/resnet50_checkpoints/1/checkpoint_2024-03-25-04h10_epoch_6_train_600.pth.tar',
+#         'models/resnet50_checkpoints/1/checkpoint_2024-03-26-01h31_epoch_23_train_800.pth.tar'
+#     ]
+#     checkpoint_dir = 'models/resnet50_checkpoints/1/'
+#     checkpoint_paths = [os.path.join(checkpoint_dir, file) for file in os.listdir(checkpoint_dir)]
+
+#     long_activations = get_longitudinal_activations('resnet50', checkpoint_paths[0::16], 'layer2.2.conv2', 14, random_noise_image)
+#     plot_longitudinal_activations(long_activations, 'layer2.2.conv2', 14, output_path='output/tmp/longitudinal_activations.png')
 
 if __name__ == '__main__':
-    from vision.featurevis import load_feature_image, preprocess_stored_feature_image
+    from vision.featurevis import load_feature_tensor
+    
+    # Generate a random noise image
+    image_size = (1, 3, 224, 224)  # Adjust the size according to your model's input size
+    random_noise_image = torch.randn(image_size)
 
-    feature_image = load_feature_image("feature_images/resnet50/pretrained/full", 'layer3.3.conv2', 22)
-    feature_image = preprocess_stored_feature_image(feature_image)
-    
-    loci_dict = {
-        'layer2.1.conv1': [0, 1],
-        'layer2.3.conv3': [33],
-        'layer3.3.conv2': [22]
-    }
-    
-    checkpoint_paths = [
-        'models/resnet50_checkpoints/1/checkpoint_2024-03-25-00h28_epoch_0_train_200.pth.tar',
-        'models/resnet50_checkpoints/1/checkpoint_2024-03-25-04h10_epoch_6_train_600.pth.tar',
-        'models/resnet50_checkpoints/1/checkpoint_2024-03-26-01h31_epoch_23_train_800.pth.tar'
+    checkpoint_dir = 'models/resnet50_checkpoints/1/'
+    checkpoint_paths = [os.path.join(checkpoint_dir, file) for file in os.listdir(checkpoint_dir)]
+
+    # Define the layers and channels to plot
+    layers_and_channels = [
+        ('layer1.0.conv1', 10),
+        ('layer2.2.conv2', 14),
+        ('layer3.1.conv1', 5),
+        ('layer4.0.conv3', 21),
+        # Add more layers and channels as needed
     ]
-    
-    longitudinal_data = get_longitudinal_activation(feature_image, 'resnet50', checkpoint_paths, loci_dict)
-    plot_longitudinal_activation(longitudinal_data, loci_dict)
 
-    # image = load_feature_image("feature_images/resnet50/pretrained/full", 'layer3.3.conv2', 22)
-    # image = preprocess_stored_feature_image(image)
-    # x = get_longitudinal_activation([image], 
-    #                                 'resnet50', 
-    #                                 ['models/resnet50_checkpoints/1/checkpoint_2024-03-25-00h28_epoch_0_train_200.pth.tar',
-    #                                                       'models/resnet50_checkpoints/1/checkpoint_2024-03-25-04h10_epoch_6_train_600.pth.tar', 
-    #                                                       'models/resnet50_checkpoints/1/checkpoint_2024-03-26-01h31_epoch_23_train_800.pth.tar'], 
-    #                                 {'layer2.1.conv1': [0,1], 'layer2.3.conv3': [33]})
+    for layer_name, channel_num in layers_and_channels:
+        # Get activations for the random noise image
+        random_activations = get_longitudinal_activations('resnet50', checkpoint_paths[0::16], layer_name, channel_num, random_noise_image)
+
+        # Load the feature image for the current layer and channel
+        feature_image = load_feature_tensor("feature_images/resnet50/pretrained/full", layer_name, channel_num)
+
+        # Get activations for the feature image
+        feature_activations = get_longitudinal_activations('resnet50', checkpoint_paths[0::16], layer_name, channel_num, feature_image)
+
+        # Create a figure and plot both activations on the same plot
+        plt.figure(figsize=(10, 6))
+        
+        checkpoint_names = list(random_activations.keys())
+        checkpoint_names.sort()
+
+        random_activation_values = [random_activations[checkpoint] for checkpoint in checkpoint_names]
+        feature_activation_values = [feature_activations[checkpoint] for checkpoint in checkpoint_names]
+
+        plt.plot(random_activation_values, marker='o', label='Random Image')
+        plt.plot(feature_activation_values, marker='o', label='Feature Image')
+
+        plt.xticks(range(len(checkpoint_names)), checkpoint_names, rotation=45, ha='right')
+        plt.xlabel('Checkpoint')
+        plt.ylabel('Activation')
+        plt.title(f'Longitudinal Activations for Layer: {layer_name}, Channel: {channel_num}')
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+
+        output_path = f'output/tmp/longitudinal_activations_{layer_name}_channel_{channel_num}.png'
+        utils.ensure_dir_exists_for_file(output_path)
+        plt.savefig(output_path)
