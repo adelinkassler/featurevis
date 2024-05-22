@@ -36,7 +36,7 @@ def main():
     parser.add_argument('--channels', type=int, nargs='+', help='Whitespace-separated list of channels to visualize (defaults to all channels)')
     parser.add_argument('--neurons', type=parse_comma_separated_int_tuples, help='Semicolon-separated list of comma-separated tuples of neurons to visualize')
     parser.add_argument('--aggregation', type=str, default='average', help='Aggregation method')
-    parser.add_argument('--number-of-images', type=int, help="Number of feature images to produce (penalized by diversity weight)")
+    parser.add_argument('--number-of-images', type=int, default=1, help="Number of feature images to produce (penalized by diversity weight)")
     parser.add_argument('--crop-factor', type=int, default=2, help='Crop factor')
     parser.add_argument('--init-images-dir', type=str, nargs='+', help='Path to directory of feature images to load as starting point (or a list of such paths, for fallback dirs)')
     parser.add_argument('--output-path', type=str, help='Output path')
@@ -142,7 +142,7 @@ def main():
                 output_path = os.path.join(args.output_path, os.path.basename(checkpoint_path))
                 model = load_torchvision_model(args.model, checkpoint_path)
                 job_array = visualize_features(model, layer_names=args.layer_names, channels=args.channels, neurons=args.neurons,
-                                            aggregation=args.aggregation, crop_factor=args.crop_factor,
+                                            aggregation=args.aggregation, number_of_images=args.number_of_images, crop_factor=args.crop_factor,
                                             init_image_loader=init_image_loader, output_path=output_path,
                                             batch_size=args.batch_size, use_gpu=args.use_gpu, parallel=parallel, return_output=False,
                                             **act_max_params)
