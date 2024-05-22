@@ -1,4 +1,4 @@
-import os, sys, time
+import os, sys, time, copy
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -13,6 +13,8 @@ from PIL import Image
 import submitit
 from itertools import product
 from functools import partial
+
+torch.autograd.set_detect_anomaly(True)
 
 def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbose=True):
     # Loads a torchvision model using default weights or a checkpoint file
@@ -103,11 +105,11 @@ def activation_maximization(
     if seed is not None:
         random.seed(seed)
     # Check that arguments are all legal
-    if model is None:
-        if model_path is not None:
-            model = torch.load(model_path)
-        else:
-            raise ValueError("model or model_path must be provided")
+    # if model is None:
+    #     if model_path is not None:
+    #         model = torch.load(model_path)
+    #     else:
+    #         raise ValueError("model or model_path must be provided")
     min_iterations = max(min_iterations, convergence_window, lr_warmup_steps)
     assert convergence_window > 1, "convergence_window must be at least 2"
 
@@ -123,16 +125,6 @@ def activation_maximization(
             device = torch.device('cpu')
     else:
         device = torch.device('cpu')
-
-    if device.type != 'cpu':
-        model = model.to(device)
-
-    # # Send model to correct device
-    # if device.type == 'cuda':
-    #     model = model.cuda()
-    # elif device.type == 'mps':
-    #     model = model.to(device)
-
     
     # Doing this keeps the info files for the output more readable
     if not use_jitter:
@@ -146,70 +138,76 @@ def activation_maximization(
     if not use_decorrelation:
         decorrelation_weight = None
 
-    # Find target layer
-    model.eval()
-    target_layer = model
-    for submodule in layer_name.split('.'):
-        target_layer = target_layer._modules.get(submodule)
-
-    channel_shape = None
-
-    # Manage settings for individual neurons
-    if aggregation == 'single':
-        def get_channel_shape(module, input, output):
-            nonlocal channel_shape
-            channel_shape = output.shape[2:]
-
-        temp_handle = target_layer.register_forward_hook(get_channel_shape)
-        dummy_input = torch.randn(1, 3, feature_image_size, feature_image_size)
-        if device.type == 'cuda':
-            dummy_input = dummy_input.cuda()
-        elif device.type == 'mps':
-            dummy_input.to(device)
-        model(dummy_input)  # Pass a dummy input to get the channel size
-        temp_handle.remove()
-
-        height, width = channel_shape
-
-        # Automatically select a neuron close to the center of the image if neuron is None
-        if neuron is None:
-            center_height, center_width = height // 2, width // 2
-            neuron = (center_height, center_width)
-
-    feature_image_shape = feature_image.shape
-
-    # Define and register hook function for target neuron/channel activation
-    activation = None
-
-    def hook(module, input, output):
-        nonlocal activation
-        if aggregation == 'single':
-            activation = output[:, channel, neuron[0], neuron[1]]
-        elif aggregation == 'average':
-            activation = output[:, channel].mean()
-        elif aggregation == 'sum':
-            activation = output[:, channel].sum()
-
-    handle = target_layer.register_forward_hook(hook)
-
     feature_images = []
     max_activations = []
     loss_values_list = []
     convergence_iterations = []
 
+    # Quick fix for model
+    #TODO: make a real fix that's less wasteful
+    model_og = copy.deepcopy(model)
+
     # Optimization loop
     for k in range(number_of_images):
+        # Easier to just start from scratch with the model than to sort out all the torch grad problems (at least for now)
+        #TODO: actually sort out all the torch grad problems
+        model = copy.deepcopy(model_og)
+        model = model.to(device)
+
+        # Find target layer
+        model.eval()
+        target_layer = model
+        for submodule in layer_name.split('.'):
+            target_layer = target_layer._modules.get(submodule)
+
+        channel_shape = None
+
+        # Manage settings for individual neurons
+        if aggregation == 'single':
+            def get_channel_shape(module, input, output):
+                nonlocal channel_shape
+                channel_shape = output.shape[2:]
+
+            temp_handle = target_layer.register_forward_hook(get_channel_shape)
+            dummy_input = torch.randn(1, 3, feature_image_size, feature_image_size)
+            if device.type == 'cuda':
+                dummy_input = dummy_input.cuda()
+            elif device.type == 'mps':
+                dummy_input.to(device)
+            model(dummy_input)  # Pass a dummy input to get the channel size
+            temp_handle.remove()
+
+            height, width = channel_shape
+
+            # Automatically select a neuron close to the center of the image if neuron is None
+            if neuron is None:
+                center_height, center_width = height // 2, width // 2
+                neuron = (center_height, center_width)
+
+        # Define and register hook function for target neuron/channel activation
+        activation = None
+
+        def hook(module, input, output):
+            nonlocal activation
+            if aggregation == 'single':
+                activation = output[:, channel, neuron[0], neuron[1]]
+            elif aggregation == 'average':
+                activation = output[:, channel].mean()
+            elif aggregation == 'sum':
+                activation = output[:, channel].sum()
+
+        handle = target_layer.register_forward_hook(hook)
+
         # Create/set up initial image
         if input_image is None:
             feature_image = torch.randn(1, 3, feature_image_size, feature_image_size, requires_grad=True)
         else:
             feature_image = input_image.clone().detach().requires_grad_(True)
+
+        feature_image_shape = feature_image.shape
         
         # Configure image on device
-        if device.type == 'cuda':
-            feature_image.cuda()
-        elif device.type == 'mps':
-            feature_image = feature_image.to(device)
+        feature_image = feature_image.to(device)
         feature_image = feature_image.detach().requires_grad_(True)
 
         # Create the optimizer we will use
@@ -288,8 +286,9 @@ def activation_maximization(
             if k > 0 and diversity_weight > 0:
                 cosine_similarities = []
                 for prev_feature_image in feature_images:
+                    prev_feature_image_tensor = torch.from_numpy(prev_feature_image).float().to(device)  # Convert to tensor
                     cosine_similarity = torch.nn.functional.cosine_similarity(
-                        feature_image.flatten(), prev_feature_image.flatten(), dim=0
+                        feature_image.flatten(), prev_feature_image_tensor.flatten(), dim=0
                     )
                     cosine_similarities.append(cosine_similarity)
                 diversity_penalty = torch.mean(torch.stack(cosine_similarities))
@@ -299,7 +298,7 @@ def activation_maximization(
             # in various places, vs. doing it all at once at the end
 
             optimizer.zero_grad()
-            loss.backward()
+            loss.backward(retain_graph=True)
             optimizer.step()
 
             loss_values.append(loss.item())
@@ -401,7 +400,7 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
     # Create executor
     executor = submitit.AutoExecutor(folder=output_path)
     if parallel:
-        executor.update_parameters(timeout_min=10, slurm_partition='single')
+        executor.update_parameters(timeout_min=10, slurm_partition='single', gpus_per_node=1)
     else:
         executor.update_parameters(timeout_min=10, local_cpus=1, local_gpus=1 if use_gpu else 0)
         
