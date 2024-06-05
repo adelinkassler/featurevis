@@ -5,6 +5,16 @@ import time
 import sys
 
 def main(args):
+    """
+    Entry point of the script, retrieves job information and tracks progress of a Submitit job array.
+
+    Args:
+        args (argparse.Namespace): The command-line arguments.
+
+    This function retrieves the jobs associated with the provided job array ID and tracks their progress.
+    It displays a progress bar and job status counts, updating at the specified interval until all jobs are finished.
+    """
+
     # Retrieve the jobs using the provided array ID
     jobs = submitit.helpers.query_jobs(job_id=args.array_id)
 

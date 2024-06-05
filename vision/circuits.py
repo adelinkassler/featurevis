@@ -5,7 +5,16 @@ import pdb
 from vision.featurevis import load_feature_image, preprocess_stored_feature_image
 
 def group_neurons(feature_visualizations):
-    # Used for manually grouping neurons based on visual similarity
+    """
+    [UNDER DEVELOPMENT] Provides user interface for semi-automatic neuron grouping
+
+    Args:
+        feature_visualizations (list): A list of feature visualization images.
+
+    Returns:
+        dict: A dictionary mapping group numbers to lists of neuron indices.
+    """
+
     #TODO: make sure this works
     #TODO: add docstring
     # Display feature visualizations in a grid
@@ -37,17 +46,30 @@ def group_neurons(feature_visualizations):
     
     return neuron_groups
 
-def analyze_circuit(model, layer_name, target_neuron, prev_layer_name, top_k=5):
+def analyze_circuit(model, layer_name, target_neuron, prev_layer_name, k=5):
+    """
+    Analyzes the circuit of a target neuron by finding the top-k most influential neurons in the previous layer.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model.
+        layer_name (str): The name of the layer containing the target neuron.
+        target_neuron (int): The index of the target neuron.
+        prev_layer_name (str): The name of the previous layer.
+        top_k (int, optional): The number of top influential neurons to visualize. Defaults to 5.
+
+    Visualizes the feature visualizations and weights of the top-k most influential neurons in the previous layer.
+    """
+
     # Get the weights connecting the previous layer to the target neuron
     target_layer = model.get_layer(layer_name)
     prev_layer = model.get_layer(prev_layer_name)
     weights = target_layer.get_weights()[0][:, :, :, target_neuron]
     
     # Find the top-k most influential neurons in the previous layer
-    influential_neurons = find_influential_adjacent_neurons(weights, top_k)
+    influential_neurons = find_influential_adjacent_neurons(weights, k)
     
     # Visualize the influential neurons' feature visualizations and weights
-    fig, axes = plt.subplots(1, top_k, figsize=(12, 4))
+    fig, axes = plt.subplots(1, k, figsize=(12, 4))
     
     for i, (neuron_index, strength) in enumerate(influential_neurons):
         visualization = prev_layer.get_weights()[0][:, :, neuron_index]
@@ -58,7 +80,21 @@ def analyze_circuit(model, layer_name, target_neuron, prev_layer_name, top_k=5):
     plt.tight_layout()
     plt.show()
 
-def find_influential_adjacent_neurons(model, target_layer, target_neuron, prev_layer, top_k):
+def find_influential_adjacent_neurons(model, target_layer, target_neuron, prev_layer, k):
+    """
+    Finds the top-k most influential neurons in the previous layer for a target neuron.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model.
+        target_layer (str): The name of the target layer.
+        target_neuron (int): The index of the target neuron.
+        prev_layer (str): The name of the previous layer.
+        k (int): The number of top influential neurons to return.
+
+    Returns:
+        list: A list of tuples containing the influential neuron indices and their corresponding strengths.
+    """
+
     # Get the weights connecting the previous layer to the target layer
     target_layer_weights = model.get_layer(target_layer).get_weights()[0]
     prev_layer_output_shape = model.get_layer(prev_layer).output_shape[3]
@@ -78,9 +114,22 @@ def find_influential_adjacent_neurons(model, target_layer, target_neuron, prev_l
     connection_strengths.sort(key=lambda x: x[1], reverse=True)
     
     # Return the top-k most influential neurons
-    return connection_strengths[:top_k]
+    return connection_strengths[:k]
 
 def find_strongest_influences(model, layer_a, layer_b, channel_num):
+    """
+    Finds the strongest influences between two layers for a target channel.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model.
+        layer_a (str): The name of the first layer.
+        layer_b (str): The name of the second layer.
+        channel_num (int): The index of the target channel in layer_b.
+
+    Returns:
+        list: A list of tuples containing the channel indices and their corresponding influence strengths.
+    """
+
     module_a = model
     for submodule in layer_a.split("."):
         module_a = module_a._modules.get(submodule)
@@ -135,6 +184,22 @@ def find_strongest_influences(model, layer_a, layer_b, channel_num):
 
 # --- previous influence.py --- co-activation strategy ---
 def find_activated_neurons(model, layer1_name, layer2_name, target_channel, image_dir, aggregation='average', k=5):
+    """
+    Finds highly activated neurons between two layers based on a target channel's feature visualization.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model.
+        layer1_name (str): The name of the first layer.
+        layer2_name (str): The name of the second layer.
+        target_channel (int): The index of the target channel in layer2.
+        image_dir (str): The directory containing the feature visualization images.
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        k (int, optional): The number of top influential neurons to return. Defaults to 5.
+
+    Returns:
+        tuple: A tuple containing the indices of the top influential neurons and their corresponding influence scores.
+    """
+
     # Get the specified layers
     layer1 = get_layer_by_name(model, layer1_name)
     layer2 = get_layer_by_name(model, layer2_name)
@@ -176,6 +241,20 @@ def find_activated_neurons(model, layer1_name, layer2_name, target_channel, imag
     return top_indices.tolist(), influence_scores[top_indices].tolist()
 
 def get_layer_by_name(model, layer_name):
+    """
+    Retrieves a layer from a PyTorch model by its name.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model.
+        layer_name (str): The name of the layer to retrieve.
+
+    Returns:
+        torch.nn.Module: The layer module.
+
+    Raises:
+        ValueError: If the layer with the specified name is not found in the model.
+    """
+
     for name, module in model.named_modules():
         if name == layer_name:
             return module
@@ -183,6 +262,17 @@ def get_layer_by_name(model, layer_name):
 
 
 def calculate_coactivation_scores(layer_activations, target_activation):
+    """
+    Calculates influence scores based on layer activations and target activation.
+
+    Args:
+        layer_activations (torch.Tensor): The activations of the layer.
+        target_activation (float): The target activation value.
+
+    Returns:
+        torch.Tensor: The influence scores for each neuron in the layer.
+    """
+
     # Normalize the layer activations
     normalized_activations = layer_activations / layer_activations.sum(dim=(2, 3), keepdim=True)
 

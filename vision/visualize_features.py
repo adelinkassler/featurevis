@@ -29,6 +29,14 @@ def is_slurm_available():
 
 
 def main():
+    """
+    Entry point of the script, parses command-line arguments and calls `visualize_features` with appropriate parameters.
+
+    This function sets up the command-line interface for generating feature visualizations. It parses the provided arguments,
+    loads the specified model, and calls the `visualize_features` function from `featurevis.py` with the appropriate parameters.
+    The generated feature visualizations are saved to the specified output directory.
+    """
+
     parser = argparse.ArgumentParser(description='Visualize features using activation maximization')
     parser.add_argument('--model', type=str, help='Model name (must match class name in torchvision)')
     parser.add_argument('--checkpoint-path', type=str, nargs='+', help='Path to saved pytorch model')

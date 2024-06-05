@@ -6,7 +6,22 @@ from vision.featurevis import load_torchvision_model
 from vision import utils
 
 def get_longitudinal_activations(model_name: str, checkpoint_paths: List[str], layer_name: str, channel_num: int, 
-                             feature_image: torch.Tensor, device: str = 'cpu') -> Dict[str, float]:
+                                feature_image: torch.Tensor, device: str = 'cpu') -> Dict[str, float]:
+    """
+    Calculates longitudinal activations for a given neuron/channel across training checkpoints.
+
+    Args:
+        model_name (str): The name of the model architecture.
+        checkpoint_paths (list): A list of paths to the model checkpoints.
+        layer_name (str): The name of the layer to analyze.
+        channel_num (int): The channel index to analyze.
+        feature_image (torch.Tensor): The input feature image to use for activation calculation.
+        device (str, optional): The device to run the model on ('cpu' or 'cuda'). Defaults to 'cpu'.
+
+    Returns:
+        dict: A dictionary mapping checkpoint names to their respective activations for the specified neuron/channel.
+    """
+
     activations = {}
     
     for checkpoint_path in checkpoint_paths:
@@ -39,6 +54,16 @@ def get_longitudinal_activations(model_name: str, checkpoint_paths: List[str], l
 
 def plot_longitudinal_activations(activations: Dict[str, float], layer_name: str, channel_num: int, 
                                   output_path: str = None) -> None:
+    """
+    Plots longitudinal activations for a specific neuron/channel.
+
+    Args:
+        activations (dict): A dictionary mapping checkpoint names to their respective activations.
+        layer_name (str): The name of the layer.
+        channel_num (int): The channel index.
+        output_path (str, optional): The path to save the plot image. If None, the plot is displayed.
+    """
+
     checkpoint_names = list(activations.keys())
     checkpoint_names.sort()
     

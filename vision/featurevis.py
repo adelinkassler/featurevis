@@ -17,7 +17,19 @@ from functools import partial
 torch.autograd.set_detect_anomaly(True)
 
 def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbose=True):
-    # Loads a torchvision model using default weights or a checkpoint file
+    """
+    Loads a torchvision model using default weights or a checkpoint file.
+
+    Args:
+        model_name (str): Name of the model (must match a class name in torchvision.models).
+        checkpoint_path (str, optional): Path to a saved PyTorch model checkpoint. If None, default weights are used.
+        device (str, optional): Device to load the model on ('cpu' or 'cuda'). Defaults to 'cpu'.
+        verbose (bool, optional): Whether to print information about the loaded model. Defaults to True.
+
+    Returns:
+        torch.nn.Module: The loaded PyTorch model.
+    """
+
     if hasattr(models, model_name):
         model_class = getattr(models, model_name)
     else:
@@ -47,6 +59,16 @@ def load_torchvision_model(model_name, checkpoint_path=None, device='cpu', verbo
     return model
 
 def preprocess_image(image):
+    """
+    Preprocesses an input image for use with a PyTorch model.
+
+    Args:
+        image (PIL.Image.Image or numpy.ndarray): The input image to preprocess.
+
+    Returns:
+        torch.Tensor: The preprocessed image tensor.
+    """
+
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -55,6 +77,16 @@ def preprocess_image(image):
     return transform(image)
 
 def deprocess_image(image):
+    """
+    Deprocesses a PyTorch image tensor back into a displayable format.
+
+    Args:
+        image (torch.Tensor): The image tensor to deprocess.
+
+    Returns:
+        numpy.ndarray: The deprocessed image as a NumPy array.
+    """
+
     image = image.squeeze(0).cpu().detach().numpy()
     image = image.transpose(1, 2, 0)
     image = (image - np.min(image)) / (np.max(image) - np.min(image))
@@ -103,6 +135,57 @@ def activation_maximization(
     progress_bar=True,
     seed=None
 ):
+    """
+    Performs activation maximization to generate feature visualizations for a specific neuron or channel.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to visualize.
+        layer_name (str): The name of the layer to visualize.
+        channel (int): The channel index to visualize.
+        neuron (tuple, optional): The neuron coordinates (height, width) to visualize. If None, the entire channel is used.
+        aggregation (str, optional): The aggregation method to use for neuron selection ('average', 'single', or 'max'). Defaults to 'average'.
+        number_of_images (int, optional): The number of feature images to generate. Defaults to 1.
+        diversity_weight (float, optional): The weight for the diversity penalty. Defaults to 1.0.
+        prev_feature_images (list, optional): Previously generated feature images to apply diversity penalty. Defaults to None.
+        max_iterations (int, optional): The maximum number of optimization iterations. Defaults to 1000.
+        min_iterations (int, optional): The minimum number of optimization iterations. Defaults to 2.
+        convergence_threshold (float, optional): The convergence threshold for optimization. Defaults to 1e-4.
+        convergence_window (int, optional): The number of iterations to check for convergence. Defaults to 2.
+        lr_schedule (str, optional): The learning rate schedule ('exponential' or 'cosine'). Defaults to None.
+        learning_rate (float, optional): The initial learning rate. Defaults to 0.1.
+        lr_decay_rate (float, optional): The learning rate decay rate for exponential schedule. Defaults to None.
+        lr_min (float, optional): The minimum learning rate for cosine schedule. Defaults to None.
+        lr_warmup_steps (int, optional): The number of warmup steps for learning rate. Defaults to 0.
+        reg_lambda (float, optional): The regularization strength. Defaults to 0.01.
+        use_jitter (bool, optional): Whether to apply jitter regularization. Defaults to False.
+        jitter_scale (float, optional): The scale of jitter regularization. Defaults to 0.05.
+        use_scaling (bool, optional): Whether to apply scaling regularization. Defaults to False.
+        scale_range (float, optional): The range of scaling regularization. Defaults to 0.1.
+        use_gauss (bool, optional): Whether to apply Gaussian blur regularization. Defaults to False.
+        gauss_kernel_size (int, optional): The kernel size for Gaussian blur regularization. Defaults to 3.
+        use_tv_reg (bool, optional): Whether to apply total variation regularization. Defaults to False.
+        tv_weight (float, optional): The weight for total variation regularization. Defaults to 1e-6.
+        use_decorrelation (bool, optional): Whether to apply decorrelation regularization. Defaults to False.
+        decorrelation_weight (float, optional): The weight for decorrelation regularization. Defaults to 0.1.
+        input_image (torch.Tensor, optional): The input image to start optimization from. Defaults to None.
+        feature_image_size (int, optional): The size of the generated feature image. Defaults to 224.
+        crop_factor (int, optional): The factor for cropping the feature image. Defaults to 2.
+        use_gpu (bool, optional): Whether to use GPU for optimization. Defaults to None (auto-detect).
+        progress_bar (bool, optional): Whether to display a progress bar during optimization. Defaults to True.
+        seed (int, optional): The random seed for reproducibility. Defaults to None.
+
+    Returns:
+        tuple: A tuple containing the following elements:
+            - feature_image (torch.Tensor): The generated feature visualization image tensor.
+            - max_activation (float): The maximum activation value achieved during optimization.
+            - loss_values (list): The list of loss values at each optimization iteration.
+            - convergence_iteration (int): The iteration at which convergence was reached.
+            - layer_name (str): The name of the visualized layer.
+            - channel (int): The visualized channel index.
+            - neuron (tuple): The visualized neuron coordinates (height, width).
+            - aggregation (str): The aggregation method used for neuron selection.
+    """
+
     if seed is not None:
         random.seed(seed)
     # Check that arguments are all legal
@@ -322,6 +405,25 @@ def activation_maximization(
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
 def activation_maximization_batch(job_args):
+    """
+    Runs activation maximization in batch mode for multiple channels and neurons.
+
+    Args:
+        job_args (tuple): A tuple containing the model, layer name, channels, neurons, aggregation method,
+                          output path, image loader, number of images, and additional keyword arguments.
+
+    Returns:
+        list: A list of job results, where each job result is a list of tuples containing the following elements:
+            - images (list): The list of generated feature visualization images as NumPy arrays.
+            - activations (list): The list of maximum activation values corresponding to each feature image.
+            - loss_values_lists (list): The list of loss value lists, where each inner list contains the loss values for each optimization iteration.
+            - convergence_iterations (list): The list of convergence iterations for each feature image.
+            - layer_name (str): The name of the visualized layer.
+            - channel (int): The visualized channel index.
+            - neuron (tuple): The visualized neuron coordinates (height, width).
+            - aggregation (str): The aggregation method used for neuron selection.
+    """
+
     model, layer_name, channels, neurons, aggregation, output_path, image_loader, number_of_images, kwargs = job_args
     print(f"\nStarting job for layer: {layer_name}, channels: {channels}, neurons: {neurons}, aggregation: {aggregation}",
           f"{number_of_images} images per feature. Additional arguments: {kwargs}")
@@ -347,6 +449,29 @@ def activation_maximization_batch(job_args):
 def visualize_features(model, layer_names=None, channels=None, neurons=None, aggregation='average',
                        init_image_loader=None, number_of_images=1, output_path=None, batch_size=10, use_gpu=None,
                        parallel=False, return_output=True, cleanup=False, **kwargs):
+    """
+    Generates feature visualizations for specified layers, channels, and neurons of a model.
+
+    Args:
+        model (torch.nn.Module): The PyTorch model to visualize.
+        layer_names (list, optional): The names of the layers to visualize. If None, all convolutional layers are used.
+        channels (list, optional): The channel indices to visualize. If None, all channels are used.
+        neurons (list, optional): The neuron coordinates (height, width) to visualize. If None, the entire channel is used.
+        aggregation (str, optional): The aggregation method to use for neuron selection ('average', 'single', or 'max'). Defaults to 'average'.
+        **kwargs: Additional keyword arguments for the activation maximization process (e.g., regularization, optimization).
+
+    Returns:
+        list: A list of feature visualization results, where each result is a tuple containing the following elements:
+            - images (list): The list of generated feature visualization images as NumPy arrays.
+            - activations (list): The list of maximum activation values corresponding to each feature image.
+            - loss_values_lists (list): The list of loss value lists, where each inner list contains the loss values for each optimization iteration.
+            - convergence_iterations (list): The list of convergence iterations for each feature image.
+            - layer_name (str): The name of the visualized layer.
+            - channel (int): The visualized channel index.
+            - neuron (tuple): The visualized neuron coordinates (height, width).
+            - aggregation (str): The aggregation method used for neuron selection.
+    """
+
     use_all_channels = True if channels is None else False
 
     if layer_names is None:
@@ -439,6 +564,15 @@ def visualize_features(model, layer_names=None, channels=None, neurons=None, agg
         return feature_images
 
 def track_job_array_progress(job_arrays):
+    """
+    Tracks the progress of multiple Submitit job arrays.
+
+    Args:
+        job_arrays (list): A list of Submitit job arrays to track.
+
+    Prints the progress of the job arrays, including a progress bar and job status counts.
+    """
+
     print("Waiting for all jobs to complete...")
     num_jobs = sum(len(job_array) for job_array in job_arrays)
     jobs_ended = 0
@@ -479,6 +613,16 @@ def track_job_array_progress(job_arrays):
         print("Warning: some jobs finished with nonzero exit status", file=sys.stderr)
 
 def track_local_job_progress(jobs: List[submitit.Job], poll_frequency: float = 1.0):
+    """
+    Tracks the progress of local jobs.
+
+    Args:
+        jobs (list): A list of Submitit jobs to track.
+        poll_frequency (float, optional): The frequency at which to poll for job status updates, in seconds. Defaults to 1.0.
+
+    Prints the progress of the local jobs, including a progress bar and elapsed time.
+    """
+
     num_jobs = len(jobs)
     completed_jobs = 0
     start_time = time.time()
@@ -518,6 +662,21 @@ def plot_feature_images(feature_images, num_columns=5, output_path=None):
         plt.show()
 
 def feature_image_paths(directory, layer_name, channel, neuron=None, aggregation="average", image_num=None):
+    """
+    Generates file paths for feature visualization images and info files.
+
+    Args:
+        directory (str): The directory where the feature images are stored.
+        layer_name (str): The name of the layer.
+        channel (int): The channel index.
+        neuron (tuple, optional): The neuron coordinates (height, width). If None, the entire channel is used.
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        image_num (int, optional): The image number if multiple images were generated for the same feature. If None, no image number is appended.
+
+    Returns:
+        tuple: A tuple containing the feature image file path and the corresponding info file path.
+    """
+
     image_num_suffix = "" if image_num is None else '-' + str(image_num)
     if neuron is not None:
         filename = f"{directory}/layer_{layer_name}_channel_{channel}_neuron_{neuron[0]}_{neuron[1]}{image_num_suffix}.jpg"
@@ -531,6 +690,15 @@ def feature_image_paths(directory, layer_name, channel, neuron=None, aggregation
     return filename, info_filename
 
 def save_feature_images(feature_images, output_path, params):
+    """
+    Saves feature visualizations and their information to disk.
+
+    Args:
+        feature_images (list): A list of feature visualization results, each containing the image, activation, and other metadata.
+        output_path (str): The directory path to save the feature images and information files.
+        params (dict): Additional parameters to include in the information files.
+    """
+
     if output_path is None:
         print("No output path provided; feature images have not been saved")
         return
@@ -557,11 +725,36 @@ def save_feature_images(feature_images, output_path, params):
                 json.dump(info_data, file, indent=2)
 
 def load_feature_image(image_dir, layer_name, channel, neuron=None, aggregation='average', image_num=None):
+    """
+    Loads a previously generated feature visualization image.
+
+    Args:
+        image_dir (str): The directory containing the feature visualization images.
+        layer_name (str): The name of the layer.
+        channel (int): The channel index.
+        neuron (tuple, optional): The neuron coordinates (height, width). If None, the entire channel is used.
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        image_num (int, optional): The image number if multiple images were generated for the same feature. If None, the first image is loaded.
+
+    Returns:
+        numpy.ndarray: The loaded feature visualization image.
+    """
+
     filename, _ = feature_image_paths(image_dir, layer_name, channel, neuron, aggregation, image_num)
     image = plt.imread(filename)
     return image
 
 def preprocess_stored_feature_image(image):
+    """
+    Preprocesses a stored feature visualization image for use as input to activation maximization.
+
+    Args:
+        image (numpy.ndarray): The stored feature visualization image.
+
+    Returns:
+        torch.Tensor: The preprocessed feature visualization image tensor.
+    """
+
     assert isinstance(image, np.ndarray), "Input image is not a numpy array"
     # Preprocess feature image for use as an input image to activation_maximization
     image = torch.from_numpy(image).float()
@@ -570,12 +763,39 @@ def preprocess_stored_feature_image(image):
     return image
 
 def load_feature_tensor(image_dir, layer_name, channel, neuron=None, aggregation='average', image_num=None, device='cpu'):
+    """
+    Loads a previously generated feature visualization image as a PyTorch tensor.
+
+    Args:
+        image_dir (str): The directory containing the feature visualization images.
+        layer_name (str): The name of the layer.
+        channel (int): The channel index.
+        neuron (tuple, optional): The neuron coordinates (height, width). If None, the entire channel is used.
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        image_num (int, optional): The image number if multiple images were generated for the same feature. If None, the first image is loaded.
+        device (str, optional): The device to load the tensor on ('cpu' or 'cuda'). Defaults to 'cpu'.
+
+    Returns:
+        torch.Tensor: The loaded feature visualization image tensor.
+    """
+
     image = load_feature_image(image_dir, layer_name, channel, neuron, aggregation, image_num)
     image = preprocess_stored_feature_image(image)
     image.to(device)
     return image
 
 def make_feature_image_loader_with_fallback(image_dirs):
+    """
+    Creates a feature image loader function with fallback to previous checkpoints if the image is not found.
+
+    Args:
+        image_dirs (list): A list of directories to search for feature visualization images, in order of preference.
+
+    Returns:
+        function: A feature image loader function that takes layer name, channel, neuron, and aggregation method as arguments
+                  and returns the loaded feature visualization image tensor.
+    """
+
     def image_loader(layer_name, channel, neuron, aggregation):
         assert isinstance(image_dirs, list) and isinstance(image_dirs[0], str), \
             "Incorrectly formatted argument to image loader"
@@ -597,6 +817,30 @@ def make_feature_image_loader_with_fallback(image_dirs):
     return image_loader
 
 def plot_saved_feature_images(images_dir, layer_names, channels, neurons, aggregation, num_columns=5, batch_size=10, output_path=None):
+    """
+    Plots previously generated feature visualization images in a grid layout.
+
+    Args:
+        images_dir (str): The directory containing the feature visualization images.
+        layer_names (list): The names of the layers to plot.
+        channels (list): The channel indices to plot.
+        neurons (list): The neuron coordinates (height, width) to plot.
+        aggregation (str): The aggregation method used for neuron selection.
+        num_columns (int, optional): The number of columns in the grid layout. Defaults to 5.
+        batch_size (int, optional): The number of images to process in each batch. Defaults to 10.
+        output_path (str, optional): The path to save the plot image. If None, the plot is displayed.
+
+    Returns:
+        list: A list of plotted feature visualization results, where each result is a tuple containing the following elements:
+            - image (numpy.ndarray): The feature visualization image as a NumPy array.
+            - activation (float): The maximum activation value corresponding to the feature image.
+            - loss_values (list): The list of loss values for each optimization iteration.
+            - convergence_iteration (int): The iteration at which convergence was reached.
+            - layer_name (str): The name of the visualized layer.
+            - channel (int): The visualized channel index.
+            - neuron (tuple): The visualized neuron coordinates (height, width).
+    """
+
     feature_images = []
 
     for layer_name in layer_names:
@@ -622,15 +866,20 @@ def plot_saved_feature_images(images_dir, layer_names, channels, neurons, aggreg
     return feature_images
 
 def load_info_data(checkpoint_dirs, layer_name, channel_num, info_key="Activation", aggregation='average'):
-    data = []
-    for checkpoint_dir in checkpoint_dirs:
-        _, info_file = feature_image_paths(checkpoint_dir, layer_name, channel_num, None, aggregation)
-        with open(info_file, 'r') as f:
-            info_data = json.load(f)
-            data.append(info_data[info_key])
-    return data
+    """
+    Loads information data from feature visualization info files for a specific channel across checkpoints.
 
-def load_info_data(checkpoint_dirs, layer_name, channel_num, info_key, aggregation='average'):
+    Args:
+        checkpoint_dirs (list): A list of checkpoint directory paths.
+        layer_name (str): The name of the layer.
+        channel_num (int): The channel index.
+        info_key (str): The key of the information to load (e.g., 'Activation').
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+
+    Returns:
+        list: A list of information values corresponding to each checkpoint.
+    """
+
     data = []
     for checkpoint_dir in checkpoint_dirs:
         _, info_file = feature_image_paths(checkpoint_dir, layer_name, channel_num, None, aggregation)
@@ -640,6 +889,18 @@ def load_info_data(checkpoint_dirs, layer_name, channel_num, info_key, aggregati
     return data
 
 def plot_info_over_training(checkpoint_dirs_path, layer_name, channel_num, info_key, aggregation='average', output_dir=None):
+    """
+    Plots activation or other information over training iterations for a specific channel.
+
+    Args:
+        checkpoint_dirs_path (str): The directory path containing the checkpoint directories.
+        layer_name (str): The name of the layer.
+        channel_num (int): The channel index.
+        info_key (str): The key of the information to plot (e.g., 'Activation').
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        output_dir (str, optional): The directory to save the plot image. If None, the plot is displayed.
+    """
+
     checkpoint_dirs = [d for d in os.listdir(checkpoint_dirs_path)
                        if os.path.isdir(os.path.join(checkpoint_dirs_path, d))]
     checkpoint_dirs = sorted(checkpoint_dirs, key=lambda x: int(re.search(r'train_(\d+)', x).group(1)))
@@ -660,6 +921,17 @@ def plot_info_over_training(checkpoint_dirs_path, layer_name, channel_num, info_
     plt.show()
 
 def plot_feature_images_over_training(checkpoint_dirs_path, layer_name, channel_num, aggregation='average', output_dir=None):
+    """
+    Plots feature visualizations over training checkpoints for a specific channel.
+
+    Args:
+        checkpoint_dirs_path (str): The directory path containing the checkpoint directories.
+        layer_name (str): The name of the layer.
+        channel_num (int): The channel index.
+        aggregation (str, optional): The aggregation method used for neuron selection. Defaults to 'average'.
+        output_dir (str, optional): The directory to save the plot image. If None, the plot is displayed.
+    """
+
     checkpoint_dirs = [d for d in os.listdir(checkpoint_dirs_path)
                        if os.path.isdir(os.path.join(checkpoint_dirs_path, d))]
     checkpoint_dirs = sorted(checkpoint_dirs, key=lambda x: int(re.search(r'train_(\d+)', x).group(1)))
