@@ -90,27 +90,34 @@ def find_strongest_influences(model, layer_a, layer_b, channel_num):
     path_counts = torch.zeros(num_channels_a)
     
     current_layer = None
+    path_weights = torch.eye(num_channels_a)
     
     for name, module in model.named_modules():
         if name == layer_a:
             current_layer = module
-            path_weights = torch.eye(num_channels_a)
         elif current_layer is not None:
             if isinstance(module, torch.nn.Conv2d):
                 norm = torch.linalg.norm(module.weight)
                 w = module.weight / norm
                 w = w.view(module.out_channels, module.in_channels, -1)
                 w = w.sum(dim=-1)  # Sum over spatial dimensions
-                path_weights = torch.matmul(w, path_weights)
-            elif isinstance(module, torch.nn.Linear):
-                norm = torch.linalg.norm(module.weight)
-                w = module.weight / norm
-                path_weights = torch.matmul(w, path_weights)
+
+                if name.endswith('.downsample.0'):  # Downsample layer
+                    path_weights = torch.matmul(w, path_weights[:module.in_channels])
+                else:  # Regular convolutional layer
+                    path_weights = torch.matmul(w, path_weights)
+            elif isinstance(module, torch.nn.BatchNorm2d):
+                # Skipping batch normalization layers
+                pass
+            elif isinstance(module, torch.nn.ReLU):
+                # Skipping activation layers
+                pass
             
             if name == layer_b:
                 total_effects += path_weights[:, channel_num]
                 path_counts += (path_weights[:, channel_num] != 0).float()
                 current_layer = None
+                path_weights = torch.eye(num_channels_a)  # Reset path_weights for the next path
     
     total_effects /= path_counts
     

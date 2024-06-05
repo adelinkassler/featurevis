@@ -310,14 +310,14 @@ def activation_maximization(
     max_activation = activation.max().item()
 
     # Crop the feature image to focus on the neuron
-    if aggregation == 'single':
-        receptive_field_size = feature_image_size // width
-        crop_size = receptive_field_size * crop_factor # Adjust the crop size as needed
-        crop_top = max(0, neuron[0] * receptive_field_size - crop_size // 2)
-        crop_bottom = min(feature_image_size, crop_top + crop_size)
-        crop_left = max(0, neuron[1] * receptive_field_size - crop_size // 2)
-        crop_right = min(feature_image_size, crop_left + crop_size)
-        feature_image = feature_image[crop_top:crop_bottom, crop_left:crop_right]
+    # if aggregation == 'single':
+    #     receptive_field_size = feature_image_size // width
+    #     crop_size = receptive_field_size * crop_factor
+    #     crop_top = max(0, neuron[0] * receptive_field_size - crop_size // 2)  
+    #     crop_bottom = min(feature_image_size, crop_top + crop_size)
+    #     crop_left = max(0, neuron[1] * receptive_field_size - crop_size // 2) 
+    #     crop_right = min(feature_image_size, crop_left + crop_size)
+    #     feature_image = feature_image[:, :, crop_top:crop_bottom, crop_left:crop_right]
 
     return feature_image, max_activation, loss_values, convergence_iteration, layer_name, channel, neuron, aggregation
 
