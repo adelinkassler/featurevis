@@ -1,6 +1,6 @@
 import sys, os
 # sys.path.append(f"{os.getenv('HOME')}/vision/")
-from vision.featurevis import *
+from vision.features.featurevis import *
 import argparse
 import pdb
 import subprocess

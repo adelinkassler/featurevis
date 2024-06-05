@@ -2,7 +2,7 @@ import os
 import torch
 from typing import List, Dict
 import matplotlib.pyplot as plt
-from vision.featurevis import load_torchvision_model
+from vision.features.featurevis import load_torchvision_model
 from vision import utils
 
 def get_longitudinal_activations(model_name: str, checkpoint_paths: List[str], layer_name: str, channel_num: int, 
@@ -109,7 +109,7 @@ def plot_longitudinal_activations(activations: Dict[str, float], layer_name: str
 #     plot_longitudinal_activations(long_activations, 'layer2.2.conv2', 14, output_path='output/tmp/longitudinal_activations.png')
 
 if __name__ == '__main__':
-    from vision.featurevis import load_feature_tensor
+    from vision.features.featurevis import load_feature_tensor
     
     # Generate a random noise image
     image_size = (1, 3, 224, 224)  # Adjust the size according to your model's input size

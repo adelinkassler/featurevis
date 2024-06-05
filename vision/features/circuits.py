@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 import pdb
-from vision.featurevis import load_feature_image, preprocess_stored_feature_image
+from vision.features.featurevis import load_feature_image, preprocess_stored_feature_image
 
 def group_neurons(feature_visualizations):
     """
